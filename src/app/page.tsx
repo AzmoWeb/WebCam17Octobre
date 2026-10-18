@@ -12,9 +12,17 @@ export default async function HomePage() {
     },
   ] = await Promise.all([getStreamSummaries(), supabase.auth.getUser()]);
 
+  const { data: follows } = user
+    ? await supabase.from("follows").select("followed_id").eq("follower_id", user.id)
+    : { data: [] };
+
   return (
     <Suspense>
-      <HomeClient streams={streams} loggedIn={!!user} />
+      <HomeClient
+        streams={streams}
+        loggedIn={!!user}
+        followedIds={(follows ?? []).map((f) => f.followed_id as string)}
+      />
     </Suspense>
   );
 }

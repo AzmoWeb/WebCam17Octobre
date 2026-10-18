@@ -2,15 +2,32 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { Calendar, Eye, MapPin, RectangleHorizontal, Settings, Share2, Tag } from "lucide-react";
+import { useRouter } from "next/navigation";
+import {
+  Calendar,
+  CalendarClock,
+  CalendarDays,
+  Eye,
+  MapPin,
+  MessageCircle,
+  PlayCircle,
+  RectangleHorizontal,
+  Scissors,
+  Settings,
+  Share2,
+  Tag,
+} from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { useTrackViewer } from "@/lib/presence";
 import { useUI } from "@/components/UIProvider";
 import Avatar from "@/components/Avatar";
 import FavoriteButton from "@/components/FavoriteButton";
-import { categoryLabel, cn, formatDate } from "@/lib/utils";
+import FollowButton from "@/components/FollowButton";
+import { ClipList, ReplayList, type ClipItem, type ReplayItem } from "@/components/MediaLists";
+import { categoryLabel, cn, formatDate, formatDateTime } from "@/lib/utils";
 import Player, { type Reaction } from "./Player";
 import Chat, { type Comment } from "./Chat";
+import ClipDialog from "./ClipDialog";
 
 export type CamInfo = {
   id: string;
@@ -22,6 +39,8 @@ export type CamInfo = {
   owner_id: string;
   owner: string;
   favorites: number;
+  scheduledAt: string | null;
+  event: { id: string; title: string } | null;
 };
 
 type Props = {
@@ -31,16 +50,24 @@ type Props = {
   currentUserId: string | null;
   isFavorite: boolean;
   isBanned: boolean;
+  isFollowing: boolean;
+  followers: number;
+  clips: ClipItem[];
+  replays: ReplayItem[];
 };
 
 const REACTIONS = ["❤️", "🔥", "👏", "✊", "😮", "😂"];
 
-export default function CamRoom({ cam, initiallyLive, comments, currentUserId, isFavorite, isBanned }: Props) {
+export default function CamRoom(props: Props) {
+  const { cam, initiallyLive, comments, currentUserId, isFavorite, isBanned, isFollowing, followers, clips, replays } = props;
+  const router = useRouter();
   const { toast } = useUI();
   const viewers = useTrackViewer(cam.id);
   const [live, setLive] = useState(initiallyLive);
   const [theater, setTheater] = useState(false);
   const [reactions, setReactions] = useState<Reaction[]>([]);
+  const [clipping, setClipping] = useState(false);
+  const [mediaTab, setMediaTab] = useState<"clips" | "replays">("clips");
   const isOwner = currentUserId === cam.owner_id;
 
   // Réactions : diffusées à tous les spectateurs via Supabase Realtime Broadcast.
@@ -68,6 +95,20 @@ export default function CamRoom({ cam, initiallyLive, comments, currentUserId, i
     };
   }, [supabase, cam.id, spawn]);
 
+  // Statistiques d'audience : pic de spectateurs + un point par minute pendant le direct.
+  const viewersRef = useRef(viewers);
+  viewersRef.current = viewers;
+  useEffect(() => {
+    if (!live) return;
+    const report = () => supabase.rpc("report_viewers", { p_stream: cam.id, p_viewers: viewersRef.current });
+    const first = setTimeout(report, 5000);
+    const timer = setInterval(report, 60_000);
+    return () => {
+      clearTimeout(first);
+      clearInterval(timer);
+    };
+  }, [live, supabase, cam.id]);
+
   function react(emoji: string) {
     const now = Date.now();
     if (now - lastSent.current < 250) return; // anti-spam
@@ -89,7 +130,16 @@ export default function CamRoom({ cam, initiallyLive, comments, currentUserId, i
     }
   }
 
+  function startClip() {
+    if (!currentUserId) {
+      toast("Connecte-toi pour créer un clip.", "info");
+      return router.push("/login");
+    }
+    setClipping(true);
+  }
+
   const toggleTheater = useCallback(() => setTheater((t) => !t), []);
+  const scheduled = cam.scheduledAt && new Date(cam.scheduledAt).getTime() > Date.now() ? cam.scheduledAt : null;
 
   return (
     <div className={cn("cam-layout", theater && "theater")}>
@@ -102,6 +152,8 @@ export default function CamRoom({ cam, initiallyLive, comments, currentUserId, i
           theater={theater}
           onToggleTheater={toggleTheater}
           reactions={reactions}
+          scheduledAt={cam.scheduledAt}
+          onClip={startClip}
         />
 
         <div className="card cam-info">
@@ -112,6 +164,10 @@ export default function CamRoom({ cam, initiallyLive, comments, currentUserId, i
                 {live ? (
                   <span className="stat-pill live">
                     <span className="live-dot on" /> En direct
+                  </span>
+                ) : scheduled ? (
+                  <span className="stat-pill" style={{ color: "var(--accent)" }}>
+                    <CalendarClock size={14} /> Prévu {formatDateTime(scheduled)}
                   </span>
                 ) : (
                   <span className="stat-pill">
@@ -129,11 +185,21 @@ export default function CamRoom({ cam, initiallyLive, comments, currentUserId, i
                     <MapPin size={14} /> {cam.city}
                   </span>
                 )}
+                {cam.event && (
+                  <Link href={`/events/${cam.event.id}`} className="stat-pill" style={{ color: "var(--accent)" }}>
+                    <CalendarDays size={14} /> {cam.event.title}
+                  </Link>
+                )}
               </div>
             </div>
 
             <div className="row">
               <FavoriteButton streamId={cam.id} initial={isFavorite} count={cam.favorites} loggedIn={!!currentUserId} />
+              {live && (
+                <button className="btn" onClick={startClip} title="Clip des dernières secondes">
+                  <Scissors size={16} /> Clip
+                </button>
+              )}
               <button className="btn" onClick={share}>
                 <Share2 size={16} /> Partager
               </button>
@@ -173,9 +239,23 @@ export default function CamRoom({ cam, initiallyLive, comments, currentUserId, i
                 <Calendar size={13} /> Caméra créée le {formatDate(cam.created_at)}
               </div>
             </div>
-            <Link href={`/u/${cam.owner}`} className="btn btn-sm">
-              Voir le profil
-            </Link>
+            {!isOwner && (
+              <>
+                {currentUserId && (
+                  <Link href={`/messages/${cam.owner}`} className="btn btn-sm" title="Message privé">
+                    <MessageCircle size={14} /> Message
+                  </Link>
+                )}
+                <FollowButton
+                  userId={cam.owner_id}
+                  username={cam.owner}
+                  initial={isFollowing}
+                  followers={followers}
+                  loggedIn={!!currentUserId}
+                  small
+                />
+              </>
+            )}
           </div>
 
           {cam.description && (
@@ -183,6 +263,26 @@ export default function CamRoom({ cam, initiallyLive, comments, currentUserId, i
               {cam.description}
             </p>
           )}
+        </div>
+
+        <div className="card">
+          <div className="card-header">
+            <div className="tabs">
+              <button className={cn("tab", mediaTab === "clips" && "active")} onClick={() => setMediaTab("clips")}>
+                <Scissors size={14} /> Clips <span className="count">{clips.length}</span>
+              </button>
+              <button className={cn("tab", mediaTab === "replays" && "active")} onClick={() => setMediaTab("replays")}>
+                <PlayCircle size={14} /> Replays <span className="count">{replays.length}</span>
+              </button>
+            </div>
+          </div>
+          <div className="card-body">
+            {mediaTab === "clips" ? (
+              <ClipList clips={clips} empty="Aucun clip. Pendant un direct, clique sur « Clip » pour garder un moment fort." />
+            ) : (
+              <ReplayList replays={replays} empty="Les directs terminés apparaîtront ici." />
+            )}
+          </div>
         </div>
       </div>
 
@@ -195,6 +295,8 @@ export default function CamRoom({ cam, initiallyLive, comments, currentUserId, i
         isBanned={isBanned}
         viewers={viewers}
       />
+
+      {clipping && <ClipDialog streamId={cam.id} streamTitle={cam.title} onClose={() => setClipping(false)} />}
     </div>
   );
 }

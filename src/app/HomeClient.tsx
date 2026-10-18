@@ -3,16 +3,21 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Compass, Eye, Heart, Radio, Search, SlidersHorizontal, Video, X } from "lucide-react";
+import { CalendarClock, Compass, Eye, Heart, LayoutGrid, Map, Radio, Search, SlidersHorizontal, UserCheck, Video, X } from "lucide-react";
 import StreamCard from "@/components/StreamCard";
 import { useViewerCounts } from "@/lib/presence";
 import type { StreamSummary } from "@/lib/streams";
 import { CATEGORIES, cn } from "@/lib/utils";
 
-type Tab = "toutes" | "direct" | "favoris";
+type Tab = "toutes" | "direct" | "avenir" | "abonnements" | "favoris";
 type Sort = "live" | "viewers" | "recent" | "favorites";
 
-export default function HomeClient({ streams, loggedIn }: { streams: StreamSummary[]; loggedIn: boolean }) {
+type Props = { streams: StreamSummary[]; loggedIn: boolean; followedIds: string[] };
+
+const isUpcoming = (s: StreamSummary) => !s.live && !!s.scheduledAt && new Date(s.scheduledAt).getTime() > Date.now();
+
+export default function HomeClient({ streams, loggedIn, followedIds }: Props) {
+  const followed = useMemo(() => new Set(followedIds), [followedIds]);
   const router = useRouter();
   const params = useSearchParams();
   const viewers = useViewerCounts();
@@ -36,11 +41,14 @@ export default function HomeClient({ streams, loggedIn }: { streams: StreamSumma
     const list = streams.filter((s) => {
       if (tab === "direct" && !s.live) return false;
       if (tab === "favoris" && !favs.has(s.id)) return false;
+      if (tab === "abonnements" && !followed.has(s.ownerId)) return false;
+      if (tab === "avenir" && !isUpcoming(s)) return false;
       if (category && s.category !== category) return false;
       if (q && ![s.title, s.owner, s.city, s.description].some((v) => v.toLowerCase().includes(q))) return false;
       return true;
     });
     const v = (s: StreamSummary) => viewers[s.id] ?? 0;
+    if (tab === "avenir") return list.sort((a, b) => a.scheduledAt!.localeCompare(b.scheduledAt!));
     return list.sort((a, b) => {
       switch (sort) {
         case "viewers":
@@ -53,7 +61,10 @@ export default function HomeClient({ streams, loggedIn }: { streams: StreamSumma
           return Number(b.live) - Number(a.live) || v(b) - v(a);
       }
     });
-  }, [streams, tab, favs, category, query, sort, viewers]);
+  }, [streams, tab, favs, followed, category, query, sort, viewers]);
+
+  const upcomingCount = streams.filter(isUpcoming).length;
+  const followedCount = streams.filter((s) => followed.has(s.ownerId)).length;
 
   const countFor = (c: string) => streams.filter((s) => s.category === c).length;
   const hasFilters = query || category;
@@ -75,6 +86,12 @@ export default function HomeClient({ streams, loggedIn }: { streams: StreamSumma
           <a href="#explorer" className="btn btn-gradient btn-lg">
             <Compass size={18} /> Explorer les directs
           </a>
+          <Link href="/carte" className="btn btn-lg">
+            <Map size={18} /> Carte en direct
+          </Link>
+          <Link href="/mosaique" className="btn btn-lg">
+            <LayoutGrid size={18} /> Mosaïque
+          </Link>
           <Link href={loggedIn ? "/dashboard" : "/login?mode=signup"} className="btn btn-lg">
             <Video size={18} /> Diffuser ma caméra
           </Link>
@@ -104,10 +121,18 @@ export default function HomeClient({ streams, loggedIn }: { streams: StreamSumma
             <button className={cn("tab", tab === "direct" && "active")} onClick={() => setTab("direct")}>
               <Radio size={15} /> En direct <span className="count">{liveCount}</span>
             </button>
+            <button className={cn("tab", tab === "avenir" && "active")} onClick={() => setTab("avenir")}>
+              <CalendarClock size={15} /> À venir <span className="count">{upcomingCount}</span>
+            </button>
             {loggedIn && (
-              <button className={cn("tab", tab === "favoris" && "active")} onClick={() => setTab("favoris")}>
-                <Heart size={15} /> Favoris <span className="count">{favs.size}</span>
-              </button>
+              <>
+                <button className={cn("tab", tab === "abonnements" && "active")} onClick={() => setTab("abonnements")}>
+                  <UserCheck size={15} /> Abonnements <span className="count">{followedCount}</span>
+                </button>
+                <button className={cn("tab", tab === "favoris" && "active")} onClick={() => setTab("favoris")}>
+                  <Heart size={15} /> Favoris <span className="count">{favs.size}</span>
+                </button>
+              </>
             )}
           </div>
 
@@ -182,14 +207,22 @@ export default function HomeClient({ streams, loggedIn }: { streams: StreamSumma
                   ? "Personne n'est en direct"
                   : tab === "favoris"
                     ? "Pas encore de favoris"
-                    : "Aucune caméra pour l'instant"}
+                    : tab === "abonnements"
+                      ? "Aucun abonnement"
+                      : tab === "avenir"
+                        ? "Aucun direct programmé"
+                        : "Aucune caméra pour l'instant"}
             </h3>
             <p>
               {hasFilters
                 ? "Essaie d'autres mots-clés ou retire les filtres."
                 : tab === "favoris"
                   ? "Clique sur le cœur d'une caméra pour la retrouver ici."
-                  : "Sois le premier à diffuser une caméra !"}
+                  : tab === "abonnements"
+                    ? "Abonne-toi à des streamers depuis leur profil pour retrouver leurs caméras ici."
+                    : tab === "avenir"
+                      ? "Les streamers peuvent programmer un direct depuis le Studio."
+                      : "Sois le premier à diffuser une caméra !"}
             </p>
             {hasFilters ? (
               <button

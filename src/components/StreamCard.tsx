@@ -1,11 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { Eye, Heart, MapPin, Video } from "lucide-react";
+import { CalendarClock, Eye, Heart, MapPin, Video } from "lucide-react";
 import Avatar from "./Avatar";
 import FavoriteButton from "./FavoriteButton";
 import type { StreamSummary } from "@/lib/streams";
-import { categoryLabel, gradientFor, timeAgo } from "@/lib/utils";
+import { categoryLabel, formatDateTime, gradientFor, timeAgo } from "@/lib/utils";
 
 type Props = {
   stream: StreamSummary;
@@ -20,7 +20,15 @@ export default function StreamCard({ stream: s, viewers, loggedIn, onFavoriteCha
       <div className="stream-thumb" style={{ background: gradientFor(s.id) }}>
         <Video size={44} className="thumb-icon" />
         <div className="tl">
-          {s.live ? <span className="badge badge-live">EN DIRECT</span> : <span className="badge badge-glass">Hors ligne</span>}
+          {s.live ? (
+            <span className="badge badge-live">EN DIRECT</span>
+          ) : s.scheduledAt && new Date(s.scheduledAt).getTime() > Date.now() ? (
+            <span className="badge badge-glass" suppressHydrationWarning>
+              <CalendarClock size={12} /> {formatDateTime(s.scheduledAt)}
+            </span>
+          ) : (
+            <span className="badge badge-glass">Hors ligne</span>
+          )}
         </div>
         <div className="tr">
           <FavoriteButton
