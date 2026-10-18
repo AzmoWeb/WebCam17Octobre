@@ -26,7 +26,8 @@ import { useViewerCounts } from "@/lib/presence";
 import { categoryLabel, cn, formatTime, gradientFor, timeAgo } from "@/lib/utils";
 import { banUser, deleteComment, deleteStream, dismissReport, unbanUser } from "./actions";
 import SetupGuide from "./SetupGuide";
-import StreamForm, { type StreamFields } from "./StreamForm";
+import StatsCard from "./StatsCard";
+import StreamForm, { type EventOption, type StreamFields } from "./StreamForm";
 import StreamKey from "./StreamKey";
 
 export type DashStream = {
@@ -39,7 +40,12 @@ export type DashStream = {
   key: string;
   favorites: number;
   live: boolean;
+  lat: number | null;
+  lng: number | null;
+  scheduled_at: string | null;
+  event_id: string | null;
 };
+export type DashBroadcast = { id: string; started_at: string; ended_at: string | null; peak_viewers: number };
 export type DashReport = {
   id: number;
   comment_id: number | null;
@@ -60,6 +66,9 @@ type Props = {
   comments: DashComment[];
   commentCount: number;
   pendingReports: Record<string, number>;
+  broadcasts: DashBroadcast[];
+  samples: { at: string; viewers: number }[];
+  events: EventOption[];
   rtmpUrl: string;
 };
 
@@ -127,7 +136,7 @@ export default function DashboardView(props: Props) {
         )}
       </div>
 
-      {form && <StreamForm initial={form === "new" ? undefined : form} onClose={() => setForm(null)} />}
+      {form && <StreamForm initial={form === "new" ? undefined : form} events={props.events} onClose={() => setForm(null)} />}
     </div>
   );
 }
@@ -141,6 +150,8 @@ function StreamDetail({
   rtmpUrl,
   viewers,
   onEdit,
+  broadcasts,
+  samples,
 }: Props & { selected: DashStream; viewers: number; onEdit: () => void }) {
   const router = useRouter();
   const [live, setLive] = useState(s.live);
@@ -215,6 +226,8 @@ function StreamDetail({
       </div>
 
       <StreamKey streamId={s.id} rtmpUrl={rtmpUrl} streamKey={s.key} />
+
+      <StatsCard broadcasts={broadcasts} samples={samples} />
 
       <SetupGuide rtmpUrl={rtmpUrl} />
 

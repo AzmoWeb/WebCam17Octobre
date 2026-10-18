@@ -28,7 +28,24 @@ function readStreamFields(formData: FormData) {
   const city = String(formData.get("city") ?? "").trim().slice(0, 80);
   const rawCategory = String(formData.get("category") ?? "autre");
   const category = CATEGORIES.some((c) => c.value === rawCategory) ? rawCategory : "autre";
-  return { title, description, city, category };
+
+  const num = (k: string) => {
+    const raw = String(formData.get(k) ?? "");
+    const n = Number(raw);
+    return raw && Number.isFinite(n) ? n : null;
+  };
+  let lat = num("lat");
+  let lng = num("lng");
+  if (lat === null || lng === null || Math.abs(lat) > 90 || Math.abs(lng) > 180) lat = lng = null;
+
+  const rawDate = String(formData.get("scheduled_at") ?? "");
+  const date = rawDate ? new Date(rawDate) : null;
+  const scheduled_at = date && !Number.isNaN(date.getTime()) ? date.toISOString() : null;
+
+  const rawEvent = String(formData.get("event_id") ?? "");
+  const event_id = /^[0-9a-f-]{36}$/i.test(rawEvent) ? rawEvent : null;
+
+  return { title, description, city, category, lat, lng, scheduled_at, event_id };
 }
 
 export async function createStream(formData: FormData): Promise<ActionResult<string>> {

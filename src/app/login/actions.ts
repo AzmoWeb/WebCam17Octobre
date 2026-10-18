@@ -6,18 +6,25 @@ import { createClient } from "@/lib/supabase/server";
 
 export type AuthState = { error?: string; message?: string } | null;
 
+/** Jeton du captcha Turnstile (champ ajouté par le widget), si activé. */
+const captchaToken = (formData: FormData) => String(formData.get("cf-turnstile-response") ?? "") || undefined;
+const CAPTCHA_ERROR = "Vérification anti-robot échouée, réessaie.";
+
 export async function signIn(_prev: AuthState, formData: FormData): Promise<AuthState> {
   const supabase = await createClient();
   const { error } = await supabase.auth.signInWithPassword({
     email: String(formData.get("email") ?? "").trim(),
     password: String(formData.get("password") ?? ""),
+    options: { captchaToken: captchaToken(formData) },
   });
   if (error) {
     return {
       error:
         error.code === "email_not_confirmed"
           ? "Confirme d'abord ton adresse e-mail (lien reçu par mail)."
-          : "E-mail ou mot de passe incorrect.",
+          : error.message.toLowerCase().includes("captcha")
+            ? CAPTCHA_ERROR
+            : "E-mail ou mot de passe incorrect.",
     };
   }
 
@@ -45,9 +52,12 @@ export async function signUp(_prev: AuthState, formData: FormData): Promise<Auth
     options: {
       data: { username },
       emailRedirectTo: `${process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000"}/auth/callback`,
+      captchaToken: captchaToken(formData),
     },
   });
-  if (error) return { error: `Inscription impossible : ${error.message}` };
+  if (error) {
+    return { error: error.message.toLowerCase().includes("captcha") ? CAPTCHA_ERROR : `Inscription impossible : ${error.message}` };
+  }
 
   // Sans session, Supabase attend la confirmation par e-mail.
   if (!data.session) return { message: "Compte créé ! Clique sur le lien reçu par e-mail pour l'activer." };

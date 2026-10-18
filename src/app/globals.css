@@ -2298,6 +2298,15 @@ p {
   display: initial;
 }
 
+@media (max-width: 1240px) {
+  /* Menu principal : icônes seules quand la place manque. */
+  .nav-link {
+    font-size: 0;
+    gap: 0;
+    padding: 9px;
+  }
+}
+
 @media (max-width: 1080px) {
   .cam-layout {
     grid-template-columns: 1fr;

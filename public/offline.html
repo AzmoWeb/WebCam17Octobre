@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Hors connexion · CamManif</title>
+    <style>
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        background: #090b10;
+        color: #eef0f5;
+        font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+        text-align: center;
+        padding: 16px;
+      }
+      .logo {
+        width: 72px;
+        height: 72px;
+        margin: 0 auto 20px;
+        border-radius: 20px;
+        background: linear-gradient(135deg, #7c5cff, #b05cff 55%, #22d3ee);
+      }
+      button {
+        margin-top: 20px;
+        padding: 10px 18px;
+        border: 0;
+        border-radius: 10px;
+        background: #7c5cff;
+        color: #fff;
+        font: inherit;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      p {
+        color: #8a93a6;
+      }
+    </style>
+  </head>
+  <body>
+    <div>
+      <div class="logo"></div>
+      <h1>Pas de connexion</h1>
+      <p>CamManif a besoin d'Internet pour afficher les directs.</p>
+      <button onclick="location.reload()">Réessayer</button>
+    </div>
+  </body>
+</html>

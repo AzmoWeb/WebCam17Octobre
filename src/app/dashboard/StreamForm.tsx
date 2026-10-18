@@ -3,15 +3,46 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Modal, useUI } from "@/components/UIProvider";
-import { CATEGORIES } from "@/lib/utils";
+import LocationPicker from "@/components/LocationPicker";
+import { CATEGORIES, formatDateTime } from "@/lib/utils";
+import { toLocalInput } from "@/app/events/EventForm";
 import { createStream, updateStream } from "./actions";
 
-export type StreamFields = { id?: string; title: string; description: string; category: string; city: string };
+export type StreamFields = {
+  id?: string;
+  title: string;
+  description: string;
+  category: string;
+  city: string;
+  lat: number | null;
+  lng: number | null;
+  scheduled_at: string | null;
+  event_id: string | null;
+};
 
-const EMPTY: StreamFields = { title: "", description: "", category: "manifestation", city: "" };
+export type EventOption = { id: string; title: string; starts_at: string };
+
+const EMPTY: StreamFields = {
+  title: "",
+  description: "",
+  category: "manifestation",
+  city: "",
+  lat: null,
+  lng: null,
+  scheduled_at: null,
+  event_id: null,
+};
 
 /** Fenêtre de création / modification d'une caméra. */
-export default function StreamForm({ initial, onClose }: { initial?: StreamFields; onClose: () => void }) {
+export default function StreamForm({
+  initial,
+  events,
+  onClose,
+}: {
+  initial?: StreamFields;
+  events: EventOption[];
+  onClose: () => void;
+}) {
   const router = useRouter();
   const { toast } = useUI();
   const [values, setValues] = useState(initial ?? EMPTY);
@@ -25,6 +56,11 @@ export default function StreamForm({ initial, onClose }: { initial?: StreamField
   function submit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const fd = new FormData(e.currentTarget);
+    // datetime-local est en heure locale : on envoie une date ISO complète.
+    const local = String(fd.get("scheduled_at") ?? "");
+    fd.set("scheduled_at", local ? new Date(local).toISOString() : "");
+    fd.set("lat", values.lat === null ? "" : String(values.lat));
+    fd.set("lng", values.lng === null ? "" : String(values.lng));
     start(async () => {
       const res = editing ? await updateStream(fd) : await createStream(fd);
       if (!res.ok) return setError(res.error);
@@ -35,7 +71,7 @@ export default function StreamForm({ initial, onClose }: { initial?: StreamField
   }
 
   return (
-    <Modal title={editing ? "Modifier la caméra" : "Nouvelle caméra"} onClose={onClose} maxWidth={540}>
+    <Modal title={editing ? "Modifier la caméra" : "Nouvelle caméra"} onClose={onClose} maxWidth={620}>
       <form onSubmit={submit}>
         <div className="modal-body stack" style={{ gap: 16 }}>
           {!editing && (
@@ -59,7 +95,7 @@ export default function StreamForm({ initial, onClose }: { initial?: StreamField
             />
           </div>
           <div className="row" style={{ gap: 12, alignItems: "flex-start" }}>
-            <div className="field grow">
+            <div className="field grow" style={{ minWidth: 180 }}>
               <label htmlFor="category">Catégorie</label>
               <select id="category" name="category" className="select" value={values.category} onChange={set("category")}>
                 {CATEGORIES.map((c) => (
@@ -69,7 +105,7 @@ export default function StreamForm({ initial, onClose }: { initial?: StreamField
                 ))}
               </select>
             </div>
-            <div className="field grow">
+            <div className="field grow" style={{ minWidth: 180 }}>
               <label htmlFor="city">Ville / lieu</label>
               <input
                 id="city"
@@ -81,6 +117,38 @@ export default function StreamForm({ initial, onClose }: { initial?: StreamField
                 placeholder="Ex. Paris"
               />
             </div>
+          </div>
+          <div className="row" style={{ gap: 12, alignItems: "flex-start" }}>
+            <div className="field grow" style={{ minWidth: 180 }}>
+              <label htmlFor="scheduled_at">Direct programmé</label>
+              <input
+                id="scheduled_at"
+                name="scheduled_at"
+                type="datetime-local"
+                className="input"
+                defaultValue={toLocalInput(values.scheduled_at)}
+              />
+              <span className="hint">Facultatif : affiche un compte à rebours sur la page.</span>
+            </div>
+            <div className="field grow" style={{ minWidth: 180 }}>
+              <label htmlFor="event_id">Événement</label>
+              <select id="event_id" name="event_id" className="select" value={values.event_id ?? ""} onChange={set("event_id")}>
+                <option value="">Aucun</option>
+                {events.map((ev) => (
+                  <option key={ev.id} value={ev.id}>
+                    {ev.title} — {formatDateTime(ev.starts_at)}
+                  </option>
+                ))}
+              </select>
+              <span className="hint">Regroupe ta caméra avec les autres de l&apos;événement.</span>
+            </div>
+          </div>
+          <div className="field">
+            <label>Position sur la carte</label>
+            <LocationPicker
+              value={values.lat !== null && values.lng !== null ? { lat: values.lat, lng: values.lng } : null}
+              onChange={(p) => setValues((v) => ({ ...v, lat: p?.lat ?? null, lng: p?.lng ?? null }))}
+            />
           </div>
           <div className="field">
             <label htmlFor="description">Description</label>

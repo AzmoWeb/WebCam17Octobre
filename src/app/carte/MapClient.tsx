@@ -93,8 +93,7 @@ export default function MapClient({ streams }: { streams: StreamSummary[] }) {
         </div>
         {unlocated > 0 && (
           <p className="tiny muted" style={{ padding: "10px 16px", borderTop: "1px solid var(--border)" }}>
-            {unlocated} caméra{unlocated > 1 ? "s" : ""} sans position ne {unlocated > 1 ? "sont" : "est"} pas affichée
-            {unlocated > 1 ? "s" : ""}.
+            {unlocated > 1 ? `${unlocated} caméras sans position ne sont pas affichées.` : "1 caméra sans position n'est pas affichée."}
           </p>
         )}
       </aside>

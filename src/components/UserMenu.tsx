@@ -2,11 +2,11 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { ChevronDown, Heart, LayoutDashboard, LogOut, Settings, User } from "lucide-react";
+import { CalendarDays, ChevronDown, Heart, LayoutDashboard, LayoutGrid, LogOut, Map, MessageCircle, Settings, Shield, User } from "lucide-react";
 import Avatar from "./Avatar";
 import { signOut } from "@/app/login/actions";
 
-export default function UserMenu({ username, email }: { username: string; email?: string }) {
+export default function UserMenu({ username, email, isAdmin }: { username: string; email?: string; isAdmin?: boolean }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -48,12 +48,34 @@ export default function UserMenu({ username, email }: { username: string; email?
           <Link href="/dashboard" className="dropdown-item" onClick={close}>
             <LayoutDashboard size={16} /> Studio (mes caméras)
           </Link>
+          <Link href="/messages" className="dropdown-item" onClick={close}>
+            <MessageCircle size={16} /> Messages
+          </Link>
           <Link href="/?tab=favoris" className="dropdown-item" onClick={close}>
             <Heart size={16} /> Mes favoris
           </Link>
           <Link href="/settings" className="dropdown-item" onClick={close}>
             <Settings size={16} /> Paramètres
           </Link>
+          {/* Liens visibles sur mobile (menu principal masqué) */}
+          <div className="dropdown-sep" />
+          <Link href="/carte" className="dropdown-item" onClick={close}>
+            <Map size={16} /> Carte en direct
+          </Link>
+          <Link href="/mosaique" className="dropdown-item" onClick={close}>
+            <LayoutGrid size={16} /> Mosaïque
+          </Link>
+          <Link href="/events" className="dropdown-item" onClick={close}>
+            <CalendarDays size={16} /> Événements
+          </Link>
+          {isAdmin && (
+            <>
+              <div className="dropdown-sep" />
+              <Link href="/admin" className="dropdown-item" onClick={close}>
+                <Shield size={16} /> Administration
+              </Link>
+            </>
+          )}
           <div className="dropdown-sep" />
           <form action={signOut}>
             <button className="dropdown-item danger">

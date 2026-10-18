@@ -29,6 +29,6 @@ export async function middleware(request: NextRequest) {
 export const config = {
   // Pas de middleware sur les assets, le hook MediaMTX ni le proxy HLS (appelés très souvent).
   matcher: [
-    "/((?!_next/static|_next/image|favicon.ico|sw.js|manifest.webmanifest|icons|api/mediamtx|api/hls|api/streams|api/clips|api/replays).*)",
+    "/((?!_next/static|_next/image|favicon.ico|sw.js|offline.html|manifest.webmanifest|icons|api/mediamtx|api/hls|api/streams|api/clips|api/replays).*)",
   ],
 };
