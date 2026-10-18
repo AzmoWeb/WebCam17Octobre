@@ -4,6 +4,7 @@ import { useRef, useState, useTransition } from "react";
 import { KeyRound, Save, User } from "lucide-react";
 import { useUI } from "@/components/UIProvider";
 import Avatar from "@/components/Avatar";
+import { Alert, Button, Card, CardHeader, Field, Input, Textarea } from "@/components/ui";
 import type { ActionResult } from "@/lib/utils";
 import { updateBio, updatePassword } from "./actions";
 
@@ -16,11 +17,10 @@ function useActionForm(action: (fd: FormData) => Promise<ActionResult>, onSucces
     const fd = new FormData(e.currentTarget);
     start(async () => {
       const res = await action(fd);
-      if (res.ok) {
-        setError(null);
-        toast(res.message ?? "Enregistré");
-        onSuccess?.();
-      } else setError(res.error);
+      if (!res.ok) return setError(res.error);
+      setError(null);
+      toast(res.message ?? "Enregistré");
+      onSuccess?.();
     });
   };
   return { pending, error, submit };
@@ -33,68 +33,51 @@ export default function SettingsForms({ username, email, bio }: { username: stri
   const password = useActionForm(updatePassword, () => pwdForm.current?.reset());
 
   return (
-    <div className="stack-lg">
-      <form className="card" onSubmit={profile.submit}>
-        <div className="card-header">
-          <h3>
-            <User size={18} /> Profil public
-          </h3>
-        </div>
-        <div className="card-body stack" style={{ gap: 16 }}>
-          <div className="row" style={{ gap: 16 }}>
-            <Avatar name={username} size={64} />
-            <div>
-              <div style={{ fontWeight: 700, fontSize: 18 }}>@{username}</div>
-              <div className="muted small">{email}</div>
+    <div className="flex flex-col gap-5">
+      <Card>
+        <CardHeader icon={<User className="size-[18px]" />} title="Profil public" />
+        <form onSubmit={profile.submit} className="flex flex-col gap-4 p-4 sm:p-5">
+          <div className="flex items-center gap-4">
+            <Avatar name={username} size="lg" />
+            <div className="min-w-0">
+              <div className="text-lg font-bold">{username}</div>
+              <div className="truncate text-sm text-ink-dim">{email}</div>
             </div>
           </div>
-          <div className="field">
-            <label htmlFor="bio">Bio</label>
-            <textarea
+          <Field label="Bio" htmlFor="bio" hint={`${bioText.length}/300 — visible sur ton profil public.`}>
+            <Textarea
               id="bio"
               name="bio"
-              className="textarea"
               maxLength={300}
               value={bioText}
               onChange={(e) => setBioText(e.target.value)}
-              placeholder="Présente-toi en quelques mots : ce que tu filmes, où, quand…"
+              placeholder="Ce que tu filmes, où, quand…"
             />
-            <span className="hint">{bioText.length}/300 — affichée sur ton profil public.</span>
-          </div>
-          {profile.error && <div className="alert alert-error">{profile.error}</div>}
-          <div>
-            <button className="btn btn-primary" disabled={profile.pending}>
-              <Save size={16} /> {profile.pending ? "Enregistrement…" : "Enregistrer"}
-            </button>
-          </div>
-        </div>
-      </form>
+          </Field>
+          {profile.error && <Alert tone="error">{profile.error}</Alert>}
+          <Button type="submit" variant="primary" className="self-start" loading={profile.pending}>
+            {!profile.pending && <Save className="size-4" />} Enregistrer
+          </Button>
+        </form>
+      </Card>
 
-      <form className="card" onSubmit={password.submit} ref={pwdForm}>
-        <div className="card-header">
-          <h3>
-            <KeyRound size={18} /> Mot de passe
-          </h3>
-        </div>
-        <div className="card-body stack" style={{ gap: 16 }}>
-          <div className="row" style={{ gap: 12, alignItems: "flex-start" }}>
-            <div className="field grow" style={{ minWidth: 200 }}>
-              <label htmlFor="password">Nouveau mot de passe</label>
-              <input id="password" name="password" type="password" className="input" minLength={8} required autoComplete="new-password" />
-            </div>
-            <div className="field grow" style={{ minWidth: 200 }}>
-              <label htmlFor="confirm">Confirmation</label>
-              <input id="confirm" name="confirm" type="password" className="input" minLength={8} required autoComplete="new-password" />
-            </div>
+      <Card>
+        <CardHeader icon={<KeyRound className="size-[18px]" />} title="Mot de passe" />
+        <form ref={pwdForm} onSubmit={password.submit} className="flex flex-col gap-4 p-4 sm:p-5">
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field label="Nouveau mot de passe" htmlFor="password" hint="8 caractères minimum.">
+              <Input id="password" name="password" type="password" minLength={8} maxLength={128} required autoComplete="new-password" />
+            </Field>
+            <Field label="Confirmation" htmlFor="confirm">
+              <Input id="confirm" name="confirm" type="password" minLength={8} maxLength={128} required autoComplete="new-password" />
+            </Field>
           </div>
-          {password.error && <div className="alert alert-error">{password.error}</div>}
-          <div>
-            <button className="btn" disabled={password.pending}>
-              {password.pending ? "Modification…" : "Changer le mot de passe"}
-            </button>
-          </div>
-        </div>
-      </form>
+          {password.error && <Alert tone="error">{password.error}</Alert>}
+          <Button type="submit" className="self-start" loading={password.pending}>
+            Changer le mot de passe
+          </Button>
+        </form>
+      </Card>
     </div>
   );
 }

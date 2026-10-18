@@ -2,21 +2,14 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { CalendarDays, CalendarPlus, MapPin, Radio, Video } from "lucide-react";
+import { CalendarDays, CalendarPlus, MapPin, Video } from "lucide-react";
 import Avatar from "@/components/Avatar";
-import { cn, formatDateTime, gradientFor } from "@/lib/utils";
+import { Badge, Button, buttonClass, EmptyState, LiveBadge, PageTitle } from "@/components/ui";
+import Tabs from "@/components/ui/Tabs";
+import { formatDateTime, gradientFor } from "@/lib/utils";
 import EventForm from "./EventForm";
 
-export type EventSummary = {
-  id: string;
-  title: string;
-  description: string;
-  city: string;
-  starts_at: string;
-  owner: string;
-  cameras: number;
-  live: number;
-};
+export type EventSummary = { id: string; title: string; city: string; starts_at: string; owner: string; cameras: number; live: number };
 
 export default function EventsClient({ events, loggedIn }: { events: EventSummary[]; loggedIn: boolean }) {
   const [tab, setTab] = useState<"upcoming" | "past">("upcoming");
@@ -29,80 +22,64 @@ export default function EventsClient({ events, loggedIn }: { events: EventSummar
   const list = tab === "upcoming" ? upcoming : past;
 
   return (
-    <div className="stack-lg">
-      <div className="row between">
-        <div>
-          <h1 className="section-title" style={{ fontSize: 28 }}>
-            <CalendarDays size={26} /> Événements
-          </h1>
-          <p className="muted" style={{ marginTop: 6 }}>
-            Toutes les caméras d&apos;une même manifestation ou d&apos;un même événement, réunies sur une page avec un chat
-            commun.
-          </p>
-        </div>
-        {loggedIn ? (
-          <button className="btn btn-primary" onClick={() => setCreating(true)}>
-            <CalendarPlus size={16} /> Créer un événement
-          </button>
-        ) : (
-          <Link href="/login" className="btn">
-            Connecte-toi pour créer un événement
-          </Link>
-        )}
-      </div>
+    <div className="flex flex-col gap-6">
+      <PageTitle
+        icon={<CalendarDays className="size-7" />}
+        title="Événements"
+        subtitle="Toutes les caméras d'une manifestation ou d'un événement, réunies sur une page avec un chat commun."
+        actions={
+          loggedIn ? (
+            <Button variant="primary" onClick={() => setCreating(true)}>
+              <CalendarPlus className="size-4" /> Créer un événement
+            </Button>
+          ) : (
+            <Link href="/login" className={buttonClass()}>
+              Connecte-toi pour créer
+            </Link>
+          )
+        }
+      />
 
-      <div className="tabs" style={{ alignSelf: "flex-start" }}>
-        <button className={cn("tab", tab === "upcoming" && "active")} onClick={() => setTab("upcoming")}>
-          En cours et à venir <span className="count">{upcoming.length}</span>
-        </button>
-        <button className={cn("tab", tab === "past" && "active")} onClick={() => setTab("past")}>
-          Passés <span className="count">{past.length}</span>
-        </button>
-      </div>
+      <Tabs
+        value={tab}
+        onChange={setTab}
+        className="self-start"
+        items={[
+          { value: "upcoming", label: "En cours et à venir", count: upcoming.length },
+          { value: "past", label: "Passés", count: past.length },
+        ]}
+      />
 
       {list.length === 0 ? (
-        <div className="empty">
-          <div className="empty-icon">
-            <CalendarDays size={28} />
-          </div>
-          <h3>{tab === "upcoming" ? "Aucun événement à venir" : "Aucun événement passé"}</h3>
-          <p>Crée un événement pour regrouper plusieurs caméras.</p>
-        </div>
+        <EmptyState icon={<CalendarDays className="size-6" />} title={tab === "upcoming" ? "Aucun événement à venir" : "Aucun événement passé"}>
+          Crée un événement pour regrouper plusieurs caméras.
+        </EmptyState>
       ) : (
-        <div className="stream-grid">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
           {list.map((e) => (
-            <Link key={e.id} href={`/events/${e.id}`} className="stream-card">
-              <div className="stream-thumb" style={{ background: gradientFor(e.id), aspectRatio: "21 / 9" }}>
-                <CalendarDays size={40} className="thumb-icon" />
-                <div className="tl">
-                  {e.live > 0 ? (
-                    <span className="badge badge-live">{e.live} EN DIRECT</span>
-                  ) : (
-                    <span className="badge badge-glass">{formatDateTime(e.starts_at)}</span>
-                  )}
+            <Link key={e.id} href={`/events/${e.id}`} className="group overflow-hidden rounded-xl border border-line bg-panel transition hover:-translate-y-0.5 hover:border-brand">
+              <div className="relative grid aspect-[21/9] place-items-center text-white/80" style={{ background: gradientFor(e.id) }}>
+                <CalendarDays className="size-9 transition group-hover:scale-110" />
+                <div className="absolute top-2.5 left-2.5">
+                  {e.live > 0 ? <LiveBadge label={`${e.live} en direct`} /> : <Badge tone="glass">{formatDateTime(e.starts_at)}</Badge>}
                 </div>
               </div>
-              <div className="stream-info">
-                <Avatar name={e.owner} size={36} />
-                <div className="grow">
-                  <h3 className="truncate">{e.title}</h3>
-                  <div className="stream-meta">
-                    <span>
-                      <CalendarDays size={12} /> {formatDateTime(e.starts_at)}
+              <div className="flex gap-3 p-4">
+                <Avatar name={e.owner} size="sm" />
+                <div className="min-w-0 flex-1">
+                  <h3 className="truncate font-bold">{e.title}</h3>
+                  <div className="mt-1 flex flex-wrap gap-x-3 text-xs text-ink-dim">
+                    <span className="inline-flex items-center gap-1">
+                      <CalendarDays className="size-3" /> {formatDateTime(e.starts_at)}
                     </span>
                     {e.city && (
-                      <span>
-                        <MapPin size={12} /> {e.city}
+                      <span className="inline-flex items-center gap-1">
+                        <MapPin className="size-3" /> {e.city}
                       </span>
                     )}
-                    <span>
-                      <Video size={12} /> {e.cameras}
+                    <span className="inline-flex items-center gap-1">
+                      <Video className="size-3" /> {e.cameras}
                     </span>
-                    {e.live > 0 && (
-                      <span style={{ color: "var(--live)" }}>
-                        <Radio size={12} /> {e.live}
-                      </span>
-                    )}
                   </div>
                 </div>
               </div>

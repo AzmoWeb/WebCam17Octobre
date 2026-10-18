@@ -1,67 +1,66 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
+import { z } from "zod";
 import { createClient } from "@/lib/supabase/server";
-import { getStreamKey } from "@/lib/supabase/admin";
-import { isPathLive, publishPath } from "@/lib/mediamtx";
+import { isStreamLive } from "@/lib/mediamtx";
 import type { ClipItem, ReplayItem } from "@/components/MediaLists";
 import CamRoom, { type CamInfo } from "./CamRoom";
 import type { Comment } from "./Chat";
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 type Params = { params: Promise<{ id: string }> };
 
-// `profiles!owner_id` : streams est aussi lié à profiles via favorites et stream_bans,
-// il faut préciser la relation sinon PostgREST renvoie une erreur d'ambiguïté.
-const FULL =
-  "id, title, description, category, city, created_at, owner_id, scheduled_at, owner:profiles!owner_id(username), favorites(count), event:events(id, title)";
-const BASE = "id, title, created_at, owner_id, owner:profiles!owner_id(username)";
+// `profiles!owner_id` : streams est aussi lié à profiles via favorites et stream_bans.
+const SELECT =
+  "id, title, description, category, city, created_at, owner_id, scheduled_at, disabled, owner:profiles!owner_id(username), favorites(count), event:events(id, title)";
 
 type Row = {
   id: string;
   title: string;
-  description?: string;
-  category?: string;
-  city?: string;
+  description: string;
+  category: string;
+  city: string;
   created_at: string;
   owner_id: string;
-  scheduled_at?: string | null;
+  scheduled_at: string | null;
+  disabled: boolean;
   owner: { username: string } | null;
-  favorites?: { count: number }[];
-  event?: { id: string; title: string } | null;
+  favorites: { count: number }[];
+  event: { id: string; title: string } | null;
 };
 
 async function loadStream(id: string): Promise<Row | null> {
-  if (!UUID.test(id)) return null;
+  if (!z.string().uuid().safeParse(id).success) return null;
   const supabase = await createClient();
-  const full = await supabase.from("streams").select(FULL).eq("id", id).maybeSingle();
-  if (!full.error) return full.data as unknown as Row | null;
-  // Migrations 002/003 pas encore appliquées : requête minimale.
-  console.error("Chargement de la caméra (requête complète) :", full.error.message);
-  const base = await supabase.from("streams").select(BASE).eq("id", id).maybeSingle();
-  if (base.error) console.error("Chargement de la caméra impossible :", base.error.message);
-  return base.data as unknown as Row | null;
+  const { data, error } = await supabase.from("streams").select(SELECT).eq("id", id).maybeSingle();
+  if (error) console.error("Chargement de la caméra :", error.message);
+  return data as unknown as Row | null;
 }
 
 export async function generateMetadata({ params }: Params): Promise<Metadata> {
   const stream = await loadStream((await params).id);
-  return stream ? { title: stream.title, description: stream.description || undefined } : { title: "Caméra introuvable" };
+  return stream && !stream.disabled
+    ? { title: stream.title, description: stream.description || undefined }
+    : { title: "Caméra introuvable" };
 }
 
 export default async function CamPage({ params }: Params) {
   const { id } = await params;
   const stream = await loadStream(id);
-  if (!stream) notFound();
-
   const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
+  // Caméra bloquée par un admin : invisible sauf pour son propriétaire.
+  if (!stream || (stream.disabled && user?.id !== stream.owner_id)) notFound();
 
-  const key = await getStreamKey(id);
   const none = Promise.resolve({ data: null });
   const [comments, ban, fav, follow, followers, clips, replays, live] = await Promise.all([
-    supabase.from("comments").select("*").eq("stream_id", id).order("created_at", { ascending: false }).limit(100),
+    supabase
+      .from("comments")
+      .select("id, stream_id, user_id, username, content, created_at")
+      .eq("stream_id", id)
+      .order("created_at", { ascending: false })
+      .limit(100),
     user ? supabase.from("stream_bans").select("user_id").eq("stream_id", id).eq("user_id", user.id).maybeSingle() : none,
     user ? supabase.from("favorites").select("stream_id").eq("stream_id", id).eq("user_id", user.id).maybeSingle() : none,
     user
@@ -81,26 +80,25 @@ export default async function CamPage({ params }: Params) {
       .not("ended_at", "is", null)
       .order("started_at", { ascending: false })
       .limit(24),
-    key ? isPathLive(publishPath(key)) : Promise.resolve(false),
+    stream.disabled ? Promise.resolve(false) : isStreamLive(id),
   ]);
 
   const cam: CamInfo = {
     id: stream.id,
     title: stream.title,
-    description: stream.description ?? "",
-    category: stream.category ?? "autre",
-    city: stream.city ?? "",
+    description: stream.description,
+    category: stream.category,
+    city: stream.city,
     created_at: stream.created_at,
     owner_id: stream.owner_id,
     owner: stream.owner?.username ?? "inconnu",
     favorites: stream.favorites?.[0]?.count ?? 0,
-    scheduledAt: stream.scheduled_at ?? null,
-    event: stream.event ?? null,
+    scheduledAt: stream.scheduled_at,
+    event: stream.event,
   };
 
-  const clipItems: ClipItem[] = ((clips.data ?? []) as unknown as (Omit<ClipItem, "creator"> & { creator: { username: string } | null })[]).map(
-    (c) => ({ ...c, creator: c.creator?.username ?? "inconnu" }),
-  );
+  type ClipRow = Omit<ClipItem, "creator"> & { creator: { username: string } | null };
+  const clipItems: ClipItem[] = ((clips.data ?? []) as unknown as ClipRow[]).map((c) => ({ ...c, creator: c.creator?.username ?? "inconnu" }));
 
   return (
     <CamRoom

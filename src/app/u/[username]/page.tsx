@@ -1,27 +1,34 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { Calendar, Heart, MessageCircle, PlayCircle, Radio, Scissors, Settings, ShieldAlert, Users, Video } from "lucide-react";
+import { Calendar, Heart, MessageCircle, PlayCircle, Scissors, Settings, Users, Video } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
 import { getStreamSummaries } from "@/lib/streams";
+import { username as usernameSchema } from "@/lib/validation";
 import { formatDate, gradientFor } from "@/lib/utils";
 import Avatar from "@/components/Avatar";
 import FollowButton from "@/components/FollowButton";
 import { ClipList, ReplayList, type ClipItem, type ReplayItem } from "@/components/MediaLists";
+import { Badge, buttonClass, Card, LiveBadge, SectionTitle } from "@/components/ui";
 import ProfileStreams from "./ProfileStreams";
 
 type Params = { params: Promise<{ username: string }> };
 
 export async function generateMetadata({ params }: Params): Promise<Metadata> {
-  return { title: `@${decodeURIComponent((await params).username)}` };
+  const name = usernameSchema.safeParse(decodeURIComponent((await params).username));
+  return { title: name.success ? name.data : "Profil introuvable" };
 }
 
 export default async function ProfilePage({ params }: Params) {
-  const username = decodeURIComponent((await params).username);
-  if (!/^[A-Za-z0-9_]{3,30}$/.test(username)) notFound();
+  const name = usernameSchema.safeParse(decodeURIComponent((await params).username));
+  if (!name.success) notFound();
 
   const supabase = await createClient();
-  const { data: profile } = await supabase.from("profiles").select("*").eq("username", username).maybeSingle();
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("id, username, bio, created_at, role, is_banned")
+    .eq("username", name.data)
+    .maybeSingle();
   if (!profile) notFound();
 
   const {
@@ -53,70 +60,71 @@ export default async function ProfilePage({ params }: Params) {
   ]);
 
   const isMe = user?.id === profile.id;
-  const liveCount = streams.filter((s) => s.live).length;
+  const live = streams.some((s) => s.live);
   const totalFavs = streams.reduce((n, s) => n + s.favorites, 0);
 
   type ClipRow = Omit<ClipItem, "creator" | "streamTitle"> & { creator: { username: string } | null; stream: { title: string } | null };
   const clipItems: ClipItem[] = ((clips.data ?? []) as unknown as ClipRow[]).map((c) => ({
-    ...c,
+    id: c.id,
+    title: c.title,
+    duration: c.duration,
+    created_at: c.created_at,
     creator: c.creator?.username ?? "inconnu",
     streamTitle: c.stream?.title,
   }));
   type ReplayRow = Omit<ReplayItem, "streamTitle"> & { stream: { title: string } | null };
   const replayItems: ReplayItem[] = ((replays.data ?? []) as unknown as ReplayRow[]).map((r) => ({
-    ...r,
+    id: r.id,
+    started_at: r.started_at,
+    ended_at: r.ended_at,
+    peak_viewers: r.peak_viewers,
     streamTitle: r.stream?.title,
   }));
 
   return (
-    <div className="stack-lg">
-      <div>
-        <div className="profile-banner" style={{ background: gradientFor(profile.username) }} />
-        <div className="profile-head">
-          <Avatar name={profile.username} size={112} />
-          <div className="grow stack" style={{ gap: 6, paddingBottom: 6 }}>
-            <h1 style={{ fontSize: 28, fontWeight: 800 }}>@{profile.username}</h1>
-            <div className="row muted small" style={{ gap: 14 }}>
-              <span className="row" style={{ gap: 6 }}>
-                <Users size={14} /> <strong style={{ color: "var(--text)" }}>{followers.count ?? 0}</strong> abonnés ·{" "}
-                <strong style={{ color: "var(--text)" }}>{following.count ?? 0}</strong> abonnements
+    <div className="flex flex-col gap-8">
+      <section>
+        <div className="h-32 rounded-2xl sm:h-44" style={{ background: gradientFor(profile.username) }} />
+        <div className="-mt-12 flex flex-col gap-4 px-2 sm:-mt-14 sm:flex-row sm:items-end sm:px-6">
+          <Avatar name={profile.username} size="xl" className="border-4 border-canvas" />
+          <div className="flex min-w-0 flex-1 flex-col gap-2 sm:pb-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <h1 className="text-2xl font-extrabold sm:text-3xl">{profile.username}</h1>
+              {live && <LiveBadge />}
+              {profile.role !== "user" && <Badge tone="brand">{profile.role}</Badge>}
+              {profile.is_banned && <Badge tone="danger">Compte suspendu</Badge>}
+            </div>
+            <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-ink-dim">
+              <span className="inline-flex items-center gap-1.5">
+                <Users className="size-4" /> <strong className="text-ink">{followers.count ?? 0}</strong> abonnés ·{" "}
+                <strong className="text-ink">{following.count ?? 0}</strong> abonnements
               </span>
-              <span className="row" style={{ gap: 6 }}>
-                <Video size={14} /> {streams.length} caméra{streams.length > 1 ? "s" : ""}
+              <span className="inline-flex items-center gap-1.5">
+                <Video className="size-4" /> {streams.length} caméra{streams.length > 1 ? "s" : ""}
               </span>
-              <span className="row" style={{ gap: 6 }}>
-                <Heart size={14} /> {totalFavs}
+              <span className="inline-flex items-center gap-1.5">
+                <Heart className="size-4" /> {totalFavs}
               </span>
-              <span className="row" style={{ gap: 6 }}>
-                <Calendar size={14} /> Membre depuis le {formatDate(profile.created_at)}
+              <span className="inline-flex items-center gap-1.5">
+                <Calendar className="size-4" /> Depuis le {formatDate(profile.created_at)}
               </span>
-              {liveCount > 0 && (
-                <span className="badge badge-live">
-                  <Radio size={12} /> EN DIRECT
-                </span>
-              )}
-              {profile.is_banned && (
-                <span className="badge badge-warning">
-                  <ShieldAlert size={12} /> Compte suspendu
-                </span>
-              )}
             </div>
           </div>
-          <div className="row" style={{ paddingBottom: 6, marginRight: 4 }}>
+          <div className="flex flex-wrap gap-2 sm:pb-1">
             {isMe ? (
               <>
-                <Link href="/settings" className="btn">
-                  <Settings size={16} /> Modifier le profil
+                <Link href="/settings" className={buttonClass()}>
+                  <Settings className="size-4" /> Modifier
                 </Link>
-                <Link href="/dashboard" className="btn btn-primary">
-                  <Video size={16} /> Studio
+                <Link href="/dashboard" className={buttonClass({ variant: "primary" })}>
+                  <Video className="size-4" /> Studio
                 </Link>
               </>
             ) : (
               <>
                 {user && (
-                  <Link href={`/messages/${profile.username}`} className="btn">
-                    <MessageCircle size={16} /> Message
+                  <Link href={`/messages/${profile.username}`} className={buttonClass()}>
+                    <MessageCircle className="size-4" /> Message
                   </Link>
                 )}
                 <FollowButton userId={profile.id} username={profile.username} initial={!!isFollowing.data} loggedIn={!!user} />
@@ -124,15 +132,15 @@ export default async function ProfilePage({ params }: Params) {
             )}
           </div>
         </div>
-      </div>
+      </section>
 
       {profile.bio ? (
-        <p className="card card-body description">{profile.bio}</p>
+        <Card className="p-4 text-sm whitespace-pre-wrap text-ink-muted sm:p-5">{profile.bio}</Card>
       ) : (
         isMe && (
-          <p className="muted">
-            Tu n&apos;as pas encore de bio.{" "}
-            <Link href="/settings" style={{ color: "var(--accent)" }}>
+          <p className="text-sm text-ink-dim">
+            Pas encore de bio.{" "}
+            <Link href="/settings" className="font-semibold text-brand-hover">
               Ajoute-en une
             </Link>
             .
@@ -140,27 +148,23 @@ export default async function ProfilePage({ params }: Params) {
         )
       )}
 
-      <h2 className="section-title">
-        <Video size={20} /> Caméras
-      </h2>
-      <ProfileStreams streams={streams} loggedIn={!!user} />
+      <section className="flex flex-col gap-4">
+        <SectionTitle icon={<Video className="size-5" />}>Caméras</SectionTitle>
+        <ProfileStreams streams={streams} loggedIn={!!user} />
+      </section>
 
       {replayItems.length > 0 && (
-        <>
-          <h2 className="section-title">
-            <PlayCircle size={20} /> Derniers replays
-          </h2>
+        <section className="flex flex-col gap-4">
+          <SectionTitle icon={<PlayCircle className="size-5" />}>Derniers replays</SectionTitle>
           <ReplayList replays={replayItems} />
-        </>
+        </section>
       )}
 
       {clipItems.length > 0 && (
-        <>
-          <h2 className="section-title">
-            <Scissors size={20} /> Clips créés
-          </h2>
+        <section className="flex flex-col gap-4">
+          <SectionTitle icon={<Scissors className="size-5" />}>Clips créés</SectionTitle>
           <ClipList clips={clipItems} />
-        </>
+        </section>
       )}
     </div>
   );

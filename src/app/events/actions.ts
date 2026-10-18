@@ -1,34 +1,29 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { createClient } from "@/lib/supabase/server";
-import type { ActionResult } from "@/lib/utils";
+import { z } from "zod";
+import { requireUser } from "@/lib/supabase/server";
+import { rateLimit, RATE_LIMITED } from "@/lib/ratelimit";
+import { bigintId, commentContent, eventSchema, firstError, formObject, uuid } from "@/lib/validation";
+import { friendlyDbError, type ActionResult } from "@/lib/utils";
 
-function readFields(formData: FormData) {
-  const startsAt = new Date(String(formData.get("starts_at") ?? ""));
-  return {
-    title: String(formData.get("title") ?? "").trim().slice(0, 120),
-    description: String(formData.get("description") ?? "").trim().slice(0, 2000),
-    city: String(formData.get("city") ?? "").trim().slice(0, 80),
-    starts_at: Number.isNaN(startsAt.getTime()) ? null : startsAt.toISOString(),
-  };
-}
+const LOGIN_REQUIRED: ActionResult<never> = { ok: false, error: "Connecte-toi pour continuer." };
 
 export async function saveEvent(formData: FormData): Promise<ActionResult<string>> {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return { ok: false, error: "Connecte-toi pour créer un événement." };
+  const auth = await requireUser();
+  if (!auth) return LOGIN_REQUIRED;
+  const input = eventSchema.safeParse(formObject(formData));
+  if (!input.success) return { ok: false, error: firstError(input.error) };
 
-  const fields = readFields(formData);
-  if (!fields.title) return { ok: false, error: "Le titre est obligatoire." };
-  if (!fields.starts_at) return { ok: false, error: "La date de début est obligatoire." };
+  const rawId = formData.get("id");
+  const id = rawId ? uuid.safeParse(rawId) : null;
+  if (id && !id.success) return { ok: false, error: "Données invalides." };
+  if (!id && !(await rateLimit(`create-event:${auth.user.id}`, 10, 3600))) return { ok: false, error: RATE_LIMITED };
 
-  const id = String(formData.get("id") ?? "");
+  // La RLS n'autorise la modification qu'au créateur (ou à un admin).
   const { data, error } = id
-    ? await supabase.from("events").update(fields).eq("id", id).select("id").single()
-    : await supabase.from("events").insert(fields).select("id").single();
+    ? await auth.supabase.from("events").update(input.data).eq("id", id.data).select("id").single()
+    : await auth.supabase.from("events").insert(input.data).select("id").single();
   if (error) return { ok: false, error: "Enregistrement impossible." };
 
   revalidatePath("/events");
@@ -37,9 +32,38 @@ export async function saveEvent(formData: FormData): Promise<ActionResult<string
 }
 
 export async function deleteEvent(formData: FormData): Promise<ActionResult> {
-  const supabase = await createClient();
-  const { error } = await supabase.from("events").delete().eq("id", String(formData.get("id")));
-  if (error) return { ok: false, error: "Suppression impossible." };
+  const auth = await requireUser();
+  if (!auth) return LOGIN_REQUIRED;
+  const id = uuid.safeParse(formData.get("id"));
+  if (!id.success) return { ok: false, error: "Données invalides." };
+  const { error, count } = await auth.supabase.from("events").delete({ count: "exact" }).eq("id", id.data);
+  if (error || !count) return { ok: false, error: "Suppression impossible." };
   revalidatePath("/events");
   return { ok: true, message: "Événement supprimé" };
+}
+
+export type EventComment = { id: number; event_id: string; user_id: string; username: string; content: string; created_at: string };
+
+export async function sendEventComment(eventId: string, content: string): Promise<ActionResult<EventComment>> {
+  const input = z.object({ eventId: uuid, content: commentContent }).safeParse({ eventId, content });
+  if (!input.success) return { ok: false, error: firstError(input.error) };
+  const auth = await requireUser();
+  if (!auth) return LOGIN_REQUIRED;
+  const { data, error } = await auth.supabase
+    .from("event_comments")
+    .insert({ event_id: input.data.eventId, content: input.data.content })
+    .select("id, event_id, user_id, username, content, created_at")
+    .single();
+  if (error) return { ok: false, error: friendlyDbError(error.message) };
+  return { ok: true, data: data as EventComment };
+}
+
+export async function deleteEventComment(commentId: number): Promise<ActionResult> {
+  const id = bigintId.safeParse(commentId);
+  if (!id.success) return { ok: false, error: "Données invalides." };
+  const auth = await requireUser();
+  if (!auth) return LOGIN_REQUIRED;
+  const { error, count } = await auth.supabase.from("event_comments").delete({ count: "exact" }).eq("id", id.data);
+  if (error || !count) return { ok: false, error: "Suppression impossible." };
+  return { ok: true };
 }

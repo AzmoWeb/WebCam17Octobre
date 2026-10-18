@@ -4,6 +4,8 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import Hls from "hls.js";
 import { ExternalLink, Maximize, Volume2, VolumeX, WifiOff, X } from "lucide-react";
+import { LiveBadge } from "@/components/ui";
+import { cn } from "@/lib/utils";
 
 type Props = {
   streamId: string;
@@ -15,7 +17,9 @@ type Props = {
   onRemove?: () => void;
 };
 
-/** Lecteur compact pour la mosaïque : muet par défaut, un seul flux audible à la fois. */
+const ctrl = "grid size-8 place-items-center rounded-md text-white hover:bg-white/15";
+
+/** Lecteur compact de la mosaïque : muet par défaut, un seul flux audible à la fois. */
 export default function MiniPlayer({ streamId, title, owner, initiallyLive, audible, onToggleAudio, onRemove }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -63,38 +67,34 @@ export default function MiniPlayer({ streamId, title, owner, initiallyLive, audi
   }, [audible]);
 
   return (
-    <div ref={wrapRef} className={audible ? "mosaic-tile audible" : "mosaic-tile"}>
-      <video ref={videoRef} muted playsInline autoPlay />
+    <div ref={wrapRef} className={cn("group/tile relative aspect-video overflow-hidden rounded-xl bg-black", audible && "ring-3 ring-brand")}>
+      <video ref={videoRef} muted playsInline autoPlay className="size-full object-contain" />
       {!live && (
-        <div className="player-offline" style={{ gap: 8 }}>
-          <WifiOff size={26} />
-          <span className="small">Hors ligne</span>
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-white/70">
+          <WifiOff className="size-6" />
+          <span className="text-sm">Hors ligne</span>
         </div>
       )}
-      <div className="mosaic-overlay">
-        <div className="row" style={{ gap: 6, minWidth: 0 }}>
-          {live && <span className="badge badge-live">LIVE</span>}
-          <span className="mosaic-title truncate">
-            {title} <span style={{ opacity: 0.7 }}>· @{owner}</span>
+      <div className="absolute inset-x-0 top-0 flex items-center justify-between gap-2 bg-gradient-to-b from-black/75 to-transparent p-2 pb-6">
+        <div className="flex min-w-0 items-center gap-1.5">
+          {live && <LiveBadge label="Live" className="h-5 px-1.5 text-[10px]" />}
+          <span className="truncate text-[13px] font-semibold text-white">
+            {title} <span className="text-white/60">· {owner}</span>
           </span>
         </div>
-        <div className="row" style={{ gap: 2, flexWrap: "nowrap" }}>
-          <button className="pc-btn" onClick={onToggleAudio} title={audible ? "Couper le son" : "Écouter ce flux"}>
-            {audible ? <Volume2 size={17} /> : <VolumeX size={17} />}
+        <div className="flex shrink-0 gap-0.5 opacity-100 transition sm:opacity-0 sm:group-hover/tile:opacity-100">
+          <button className={ctrl} onClick={onToggleAudio} aria-label={audible ? "Couper le son" : "Écouter ce flux"}>
+            {audible ? <Volume2 className="size-4" /> : <VolumeX className="size-4" />}
           </button>
-          <button
-            className="pc-btn"
-            onClick={() => wrapRef.current?.requestFullscreen().catch(() => {})}
-            title="Plein écran"
-          >
-            <Maximize size={17} />
+          <button className={ctrl} onClick={() => wrapRef.current?.requestFullscreen().catch(() => {})} aria-label="Plein écran">
+            <Maximize className="size-4" />
           </button>
-          <Link href={`/cam/${streamId}`} className="pc-btn" title="Ouvrir la page">
-            <ExternalLink size={17} />
+          <Link href={`/cam/${streamId}`} className={ctrl} aria-label="Ouvrir la page">
+            <ExternalLink className="size-4" />
           </Link>
           {onRemove && (
-            <button className="pc-btn" onClick={onRemove} title="Retirer">
-              <X size={17} />
+            <button className={ctrl} onClick={onRemove} aria-label="Retirer">
+              <X className="size-4" />
             </button>
           )}
         </div>

@@ -1,125 +1,138 @@
 "use server";
 
-import { randomBytes } from "node:crypto";
 import { revalidatePath } from "next/cache";
-import { createClient } from "@/lib/supabase/server";
-import { CATEGORIES, type ActionResult } from "@/lib/utils";
+import { z } from "zod";
+import { requireUser } from "@/lib/supabase/server";
+import { setStreamKeyHash } from "@/lib/supabase/admin";
+import { generateStreamKey } from "@/lib/keys";
+import { rateLimit, RATE_LIMITED } from "@/lib/ratelimit";
+import { bigintId, firstError, formObject, streamSchema, uuid } from "@/lib/validation";
+import type { ActionResult } from "@/lib/utils";
 
-// La RLS garantit qu'on ne touche qu'à ses propres caméras : ces actions
-// utilisent le client de l'utilisateur connecté, pas la clé service_role.
+// Actions du Studio. La RLS limite déjà chaque écriture aux caméras de l'utilisateur ;
+// la clé de stream, elle, n'est accessible qu'avec la clé service_role, après
+// vérification explicite que la caméra appartient bien à l'utilisateur.
 
-async function userClient() {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  return user ? supabase : null;
-}
-
-const fail = (error = "Action impossible, réessaie."): ActionResult<never> => ({ ok: false, error });
+const LOGIN_REQUIRED: ActionResult<never> = { ok: false, error: "Session expirée, reconnecte-toi." };
+const INVALID: ActionResult<never> = { ok: false, error: "Données invalides." };
 const done = <T,>(message: string, data?: T): ActionResult<T> => {
   revalidatePath("/dashboard");
   return { ok: true, message, data };
 };
 
-function readStreamFields(formData: FormData) {
-  const title = String(formData.get("title") ?? "").trim().slice(0, 100);
-  const description = String(formData.get("description") ?? "").trim().slice(0, 1000);
-  const city = String(formData.get("city") ?? "").trim().slice(0, 80);
-  const rawCategory = String(formData.get("category") ?? "autre");
-  const category = CATEGORIES.some((c) => c.value === rawCategory) ? rawCategory : "autre";
-
-  const num = (k: string) => {
-    const raw = String(formData.get(k) ?? "");
-    const n = Number(raw);
-    return raw && Number.isFinite(n) ? n : null;
-  };
-  let lat = num("lat");
-  let lng = num("lng");
-  if (lat === null || lng === null || Math.abs(lat) > 90 || Math.abs(lng) > 180) lat = lng = null;
-
-  const rawDate = String(formData.get("scheduled_at") ?? "");
-  const date = rawDate ? new Date(rawDate) : null;
-  const scheduled_at = date && !Number.isNaN(date.getTime()) ? date.toISOString() : null;
-
-  const rawEvent = String(formData.get("event_id") ?? "");
-  const event_id = /^[0-9a-f-]{36}$/i.test(rawEvent) ? rawEvent : null;
-
-  return { title, description, city, category, lat, lng, scheduled_at, event_id };
+/** La caméra appartient-elle à l'utilisateur ? */
+async function ownsStream(auth: NonNullable<Awaited<ReturnType<typeof requireUser>>>, streamId: string) {
+  const { data } = await auth.supabase.from("streams").select("id").eq("id", streamId).eq("owner_id", auth.user.id).maybeSingle();
+  return !!data;
 }
 
-export async function createStream(formData: FormData): Promise<ActionResult<string>> {
-  const supabase = await userClient();
-  if (!supabase) return fail("Session expirée, reconnecte-toi.");
-  const fields = readStreamFields(formData);
-  if (!fields.title) return fail("Le titre est obligatoire.");
-  const { data, error } = await supabase.from("streams").insert(fields).select("id").single();
-  if (error) return fail();
-  return done("Caméra créée !", data.id as string);
+export type NewKey = { streamId: string; key: string };
+
+export async function createStream(formData: FormData): Promise<ActionResult<NewKey>> {
+  const auth = await requireUser();
+  if (!auth) return LOGIN_REQUIRED;
+  const input = streamSchema.safeParse(formObject(formData));
+  if (!input.success) return { ok: false, error: firstError(input.error) };
+  if (!(await rateLimit(`create-stream:${auth.user.id}`, 10, 3600))) return { ok: false, error: RATE_LIMITED };
+
+  const { data, error } = await auth.supabase.from("streams").insert(input.data).select("id").single();
+  if (error) return { ok: false, error: "Création impossible." };
+
+  const { key, hash } = generateStreamKey();
+  if (!(await setStreamKeyHash(data.id as string, hash))) return { ok: false, error: "Création de la clé impossible." };
+  return done("Caméra créée !", { streamId: data.id as string, key });
 }
 
 export async function updateStream(formData: FormData): Promise<ActionResult> {
-  const supabase = await userClient();
-  if (!supabase) return fail("Session expirée, reconnecte-toi.");
-  const fields = readStreamFields(formData);
-  if (!fields.title) return fail("Le titre est obligatoire.");
-  const { error } = await supabase.from("streams").update(fields).eq("id", String(formData.get("id")));
-  return error ? fail() : done("Caméra mise à jour");
+  const auth = await requireUser();
+  if (!auth) return LOGIN_REQUIRED;
+  const id = uuid.safeParse(formData.get("id"));
+  const input = streamSchema.safeParse(formObject(formData));
+  if (!id.success) return INVALID;
+  if (!input.success) return { ok: false, error: firstError(input.error) };
+
+  const { error, count } = await auth.supabase
+    .from("streams")
+    .update(input.data, { count: "exact" })
+    .eq("id", id.data)
+    .eq("owner_id", auth.user.id);
+  if (error || !count) return { ok: false, error: "Enregistrement impossible." };
+  revalidatePath(`/cam/${id.data}`);
+  return done("Caméra mise à jour");
 }
 
 export async function deleteStream(formData: FormData): Promise<ActionResult> {
-  const supabase = await userClient();
-  if (!supabase) return fail();
-  const { error } = await supabase.from("streams").delete().eq("id", String(formData.get("id")));
-  return error ? fail() : done("Caméra supprimée");
+  const auth = await requireUser();
+  if (!auth) return LOGIN_REQUIRED;
+  const id = uuid.safeParse(formData.get("id"));
+  if (!id.success) return INVALID;
+  const { error, count } = await auth.supabase.from("streams").delete({ count: "exact" }).eq("id", id.data).eq("owner_id", auth.user.id);
+  if (error || !count) return { ok: false, error: "Suppression impossible." };
+  return done("Caméra supprimée");
 }
 
-export async function regenerateKey(formData: FormData): Promise<ActionResult> {
-  const supabase = await userClient();
-  if (!supabase) return fail();
-  const { error } = await supabase
-    .from("stream_keys")
-    .update({ key: randomBytes(24).toString("hex"), updated_at: new Date().toISOString() })
-    .eq("stream_id", String(formData.get("id")));
-  return error ? fail() : done("Nouvelle clé générée — mets à jour ta caméra / OBS");
+/** Nouvelle clé : l'ancienne cesse de fonctionner. La clé en clair n'est renvoyée qu'ici. */
+export async function regenerateKey(formData: FormData): Promise<ActionResult<NewKey>> {
+  const auth = await requireUser();
+  if (!auth) return LOGIN_REQUIRED;
+  const id = uuid.safeParse(formData.get("id"));
+  if (!id.success) return INVALID;
+  if (!(await ownsStream(auth, id.data))) return { ok: false, error: "Action impossible." };
+  if (!(await rateLimit(`regen-key:${auth.user.id}`, 10, 3600))) return { ok: false, error: RATE_LIMITED };
+
+  const { key, hash } = generateStreamKey();
+  if (!(await setStreamKeyHash(id.data, hash))) return { ok: false, error: "Action impossible." };
+  return done("Nouvelle clé générée — copie-la maintenant, elle ne sera plus affichée.", { streamId: id.data, key });
 }
+
+// ---------------------------------------------------------------------------
+// Modération de ses caméras
+// ---------------------------------------------------------------------------
 
 export async function dismissReport(formData: FormData): Promise<ActionResult> {
-  const supabase = await userClient();
-  if (!supabase) return fail();
-  const { error } = await supabase.from("reports").delete().eq("id", Number(formData.get("id")));
-  return error ? fail() : done("Signalement ignoré");
+  const auth = await requireUser();
+  if (!auth) return LOGIN_REQUIRED;
+  const id = bigintId.safeParse(formData.get("id"));
+  if (!id.success) return INVALID;
+  const { error } = await auth.supabase.from("reports").delete().eq("id", id.data);
+  return error ? { ok: false, error: "Action impossible." } : done("Signalement ignoré");
 }
 
 export async function deleteComment(formData: FormData): Promise<ActionResult> {
-  const supabase = await userClient();
-  if (!supabase) return fail();
-  const commentId = Number(formData.get("commentId"));
-  if (commentId) await supabase.from("comments").delete().eq("id", commentId);
-  const reportId = Number(formData.get("reportId"));
-  if (reportId) await supabase.from("reports").delete().eq("id", reportId);
+  const auth = await requireUser();
+  if (!auth) return LOGIN_REQUIRED;
+  const input = z
+    .object({ commentId: bigintId.optional().catch(undefined), reportId: bigintId.optional().catch(undefined) })
+    .parse(formObject(formData));
+  if (input.commentId) await auth.supabase.from("comments").delete().eq("id", input.commentId);
+  if (input.reportId) await auth.supabase.from("reports").delete().eq("id", input.reportId);
   return done("Message supprimé");
 }
 
 export async function banUser(formData: FormData): Promise<ActionResult> {
-  const supabase = await userClient();
-  if (!supabase) return fail();
-  const streamId = String(formData.get("streamId"));
-  const userId = String(formData.get("userId"));
-  const { error } = await supabase.from("stream_bans").upsert({ stream_id: streamId, user_id: userId });
-  if (error) return fail();
-  await supabase.from("comments").delete().eq("stream_id", streamId).eq("user_id", userId);
-  await supabase.from("reports").delete().eq("stream_id", streamId).eq("reported_user_id", userId);
+  const auth = await requireUser();
+  if (!auth) return LOGIN_REQUIRED;
+  const input = z.object({ streamId: uuid, userId: uuid }).safeParse(formObject(formData));
+  if (!input.success) return INVALID;
+  const { streamId, userId } = input.data;
+  if (userId === auth.user.id) return { ok: false, error: "Tu ne peux pas te bannir toi-même." };
+
+  const { error } = await auth.supabase.from("stream_bans").upsert({ stream_id: streamId, user_id: userId }, { ignoreDuplicates: true });
+  if (error) return { ok: false, error: "Action impossible." };
+  await auth.supabase.from("comments").delete().eq("stream_id", streamId).eq("user_id", userId);
+  await auth.supabase.from("reports").delete().eq("stream_id", streamId).eq("reported_user_id", userId);
   return done("Utilisateur banni et messages supprimés");
 }
 
 export async function unbanUser(formData: FormData): Promise<ActionResult> {
-  const supabase = await userClient();
-  if (!supabase) return fail();
-  const { error } = await supabase
+  const auth = await requireUser();
+  if (!auth) return LOGIN_REQUIRED;
+  const input = z.object({ streamId: uuid, userId: uuid }).safeParse(formObject(formData));
+  if (!input.success) return INVALID;
+  const { error } = await auth.supabase
     .from("stream_bans")
     .delete()
-    .eq("stream_id", String(formData.get("streamId")))
-    .eq("user_id", String(formData.get("userId")));
-  return error ? fail() : done("Utilisateur débanni");
+    .eq("stream_id", input.data.streamId)
+    .eq("user_id", input.data.userId);
+  return error ? { ok: false, error: "Action impossible." } : done("Utilisateur débanni");
 }

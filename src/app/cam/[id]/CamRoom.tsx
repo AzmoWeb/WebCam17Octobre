@@ -3,20 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import {
-  Calendar,
-  CalendarClock,
-  CalendarDays,
-  Eye,
-  MapPin,
-  MessageCircle,
-  PlayCircle,
-  RectangleHorizontal,
-  Scissors,
-  Settings,
-  Share2,
-  Tag,
-} from "lucide-react";
+import { CalendarClock, CalendarDays, Eye, MapPin, MessageCircle, PlayCircle, Scissors, Settings, Share2, Tag } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { useTrackViewer } from "@/lib/presence";
 import { useUI } from "@/components/UIProvider";
@@ -24,10 +11,13 @@ import Avatar from "@/components/Avatar";
 import FavoriteButton from "@/components/FavoriteButton";
 import FollowButton from "@/components/FollowButton";
 import { ClipList, ReplayList, type ClipItem, type ReplayItem } from "@/components/MediaLists";
+import { Button, buttonClass, Card, LiveBadge, Pill } from "@/components/ui";
+import Tabs from "@/components/ui/Tabs";
 import { categoryLabel, cn, formatDate, formatDateTime } from "@/lib/utils";
 import Player, { type Reaction } from "./Player";
 import Chat, { type Comment } from "./Chat";
 import ClipDialog from "./ClipDialog";
+import { reportViewers } from "./actions";
 
 export type CamInfo = {
   id: string;
@@ -70,7 +60,7 @@ export default function CamRoom(props: Props) {
   const [mediaTab, setMediaTab] = useState<"clips" | "replays">("clips");
   const isOwner = currentUserId === cam.owner_id;
 
-  // Réactions : diffusées à tous les spectateurs via Supabase Realtime Broadcast.
+  // Réactions : diffusées à tous les spectateurs (Supabase Realtime Broadcast, éphémère).
   const supabase = useMemo(() => createClient(), []);
   const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
   const lastSent = useRef(0);
@@ -78,15 +68,15 @@ export default function CamRoom(props: Props) {
 
   const spawn = useCallback((emoji: string) => {
     const id = ++nextId.current;
-    const r = { id, emoji, left: 70 + Math.random() * 25, drift: (Math.random() - 0.5) * 80 };
-    setReactions((prev) => [...prev.slice(-40), r]);
+    setReactions((prev) => [...prev.slice(-40), { id, emoji, left: 70 + Math.random() * 25, drift: (Math.random() - 0.5) * 80 }]);
     setTimeout(() => setReactions((prev) => prev.filter((x) => x.id !== id)), 2700);
   }, []);
 
   useEffect(() => {
     const channel = supabase.channel(`room:${cam.id}`, { config: { broadcast: { self: false } } });
     channel.on("broadcast", { event: "reaction" }, ({ payload }) => {
-      if (REACTIONS.includes(payload?.emoji)) spawn(payload.emoji);
+      // Seuls les émojis prévus sont affichés (le contenu reçu n'est jamais interprété).
+      if (typeof payload?.emoji === "string" && REACTIONS.includes(payload.emoji)) spawn(payload.emoji);
     });
     channel.subscribe();
     channelRef.current = channel;
@@ -95,23 +85,23 @@ export default function CamRoom(props: Props) {
     };
   }, [supabase, cam.id, spawn]);
 
-  // Statistiques d'audience : pic de spectateurs + un point par minute pendant le direct.
+  // Statistiques d'audience : un point par minute pendant le direct (validé côté serveur).
   const viewersRef = useRef(viewers);
   viewersRef.current = viewers;
   useEffect(() => {
     if (!live) return;
-    const report = () => supabase.rpc("report_viewers", { p_stream: cam.id, p_viewers: viewersRef.current });
+    const report = () => reportViewers(cam.id, viewersRef.current);
     const first = setTimeout(report, 5000);
     const timer = setInterval(report, 60_000);
     return () => {
       clearTimeout(first);
       clearInterval(timer);
     };
-  }, [live, supabase, cam.id]);
+  }, [live, cam.id]);
 
   function react(emoji: string) {
     const now = Date.now();
-    if (now - lastSent.current < 250) return; // anti-spam
+    if (now - lastSent.current < 300) return;
     lastSent.current = now;
     spawn(emoji);
     channelRef.current?.send({ type: "broadcast", event: "reaction", payload: { emoji } });
@@ -123,11 +113,9 @@ export default function CamRoom(props: Props) {
       if (navigator.share) await navigator.share({ title: cam.title, url });
       else {
         await navigator.clipboard.writeText(url);
-        toast("Lien copié dans le presse-papiers");
+        toast("Lien copié");
       }
-    } catch {
-      // Partage annulé.
-    }
+    } catch {}
   }
 
   function startClip() {
@@ -142,8 +130,15 @@ export default function CamRoom(props: Props) {
   const scheduled = cam.scheduledAt && new Date(cam.scheduledAt).getTime() > Date.now() ? cam.scheduledAt : null;
 
   return (
-    <div className={cn("cam-layout", theater && "theater")}>
-      <div className="stack-lg" style={{ gap: 16, minWidth: 0 }}>
+    // Grille nommée : un seul chat, placé sous les infos sur mobile et à droite sur ordinateur.
+    <div
+      className={cn(
+        "-mx-3 -mt-5 grid grid-cols-1 gap-4 [grid-template-areas:'player''info''chat''media'] sm:-mx-5 sm:-mt-7 lg:mx-0 lg:mt-0 lg:gap-x-5",
+        !theater &&
+          "lg:grid-cols-[minmax(0,1fr)_340px] lg:[grid-template-areas:'player_chat''info_chat''media_chat'] xl:grid-cols-[minmax(0,1fr)_380px]",
+      )}
+    >
+      <div className="min-w-0 [grid-area:player]">
         <Player
           streamId={cam.id}
           title={cam.title}
@@ -153,148 +148,135 @@ export default function CamRoom(props: Props) {
           onToggleTheater={toggleTheater}
           reactions={reactions}
           scheduledAt={cam.scheduledAt}
-          onClip={startClip}
+          onClip={live ? startClip : undefined}
         />
+      </div>
 
-        <div className="card cam-info">
-          <div className="row between" style={{ alignItems: "flex-start", gap: 16 }}>
-            <div className="grow stack" style={{ gap: 10 }}>
-              <h1 className="cam-title">{cam.title}</h1>
-              <div className="row">
+        <section className="flex min-w-0 flex-col gap-4 px-3 [grid-area:info] sm:px-5 lg:px-0">
+          <div className="flex gap-3 sm:gap-4">
+            <Link href={`/u/${cam.owner}`} className="relative shrink-0">
+              <Avatar name={cam.owner} size="lg" className={cn(live && "ring-2 ring-live ring-offset-2 ring-offset-canvas")} />
+              {live && <LiveBadge label="Live" className="absolute -bottom-2 left-1/2 h-5 -translate-x-1/2 px-1.5 text-[10px]" />}
+            </Link>
+            <div className="min-w-0 flex-1">
+              <h1 className="text-lg leading-snug font-extrabold sm:text-xl">{cam.title}</h1>
+              <Link href={`/u/${cam.owner}`} className="font-semibold text-brand-hover hover:underline">
+                {cam.owner}
+              </Link>
+              <div className="mt-2 flex flex-wrap gap-1.5">
                 {live ? (
-                  <span className="stat-pill live">
-                    <span className="live-dot on" /> En direct
-                  </span>
+                  <Pill className="bg-live/15 text-live">
+                    <Eye className="size-3.5" /> {viewers} spectateur{viewers > 1 ? "s" : ""}
+                  </Pill>
                 ) : scheduled ? (
-                  <span className="stat-pill" style={{ color: "var(--accent)" }}>
-                    <CalendarClock size={14} /> Prévu {formatDateTime(scheduled)}
-                  </span>
+                  <Pill className="text-brand-hover">
+                    <CalendarClock className="size-3.5" /> <span suppressHydrationWarning>{formatDateTime(scheduled)}</span>
+                  </Pill>
                 ) : (
-                  <span className="stat-pill">
-                    <span className="live-dot" /> Hors ligne
-                  </span>
+                  <Pill>Hors ligne</Pill>
                 )}
-                <span className="stat-pill">
-                  <Eye size={14} /> {viewers} {viewers > 1 ? "spectateurs" : "spectateur"}
-                </span>
-                <span className="stat-pill">
-                  <Tag size={14} /> {categoryLabel(cam.category)}
-                </span>
+                <Pill>
+                  <Tag className="size-3.5" /> {categoryLabel(cam.category)}
+                </Pill>
                 {cam.city && (
-                  <span className="stat-pill">
-                    <MapPin size={14} /> {cam.city}
-                  </span>
+                  <Pill>
+                    <MapPin className="size-3.5" /> {cam.city}
+                  </Pill>
                 )}
                 {cam.event && (
-                  <Link href={`/events/${cam.event.id}`} className="stat-pill" style={{ color: "var(--accent)" }}>
-                    <CalendarDays size={14} /> {cam.event.title}
+                  <Link href={`/events/${cam.event.id}`}>
+                    <Pill className="text-brand-hover hover:bg-line-strong">
+                      <CalendarDays className="size-3.5" /> {cam.event.title}
+                    </Pill>
                   </Link>
                 )}
               </div>
             </div>
-
-            <div className="row">
-              <FavoriteButton streamId={cam.id} initial={isFavorite} count={cam.favorites} loggedIn={!!currentUserId} />
-              {live && (
-                <button className="btn" onClick={startClip} title="Clip des dernières secondes">
-                  <Scissors size={16} /> Clip
-                </button>
-              )}
-              <button className="btn" onClick={share}>
-                <Share2 size={16} /> Partager
-              </button>
-              <button className={cn("btn btn-icon", theater && "active")} onClick={toggleTheater} title="Mode cinéma (t)">
-                <RectangleHorizontal size={16} />
-              </button>
-              {isOwner && (
-                <Link href={`/dashboard?cam=${cam.id}`} className="btn btn-primary">
-                  <Settings size={16} /> Gérer
-                </Link>
-              )}
-            </div>
           </div>
 
-          <div className="row" style={{ marginTop: 16 }}>
-            <span className="muted small" style={{ marginRight: 4 }}>
-              Réagir :
-            </span>
-            <div className="reaction-bar">
+          <div className="flex flex-wrap items-center gap-2">
+            {!isOwner && (
+              <FollowButton userId={cam.owner_id} username={cam.owner} initial={isFollowing} followers={followers} loggedIn={!!currentUserId} />
+            )}
+            <FavoriteButton streamId={cam.id} initial={isFavorite} count={cam.favorites} loggedIn={!!currentUserId} />
+            {live && (
+              <Button onClick={startClip}>
+                <Scissors className="size-4" /> Clip
+              </Button>
+            )}
+            <Button onClick={share} aria-label="Partager">
+              <Share2 className="size-4" /> <span className="hidden sm:inline">Partager</span>
+            </Button>
+            {!isOwner && currentUserId && (
+              <Link href={`/messages/${cam.owner}`} className={buttonClass({ icon: true })} aria-label="Message privé" title="Message privé">
+                <MessageCircle className="size-4" />
+              </Link>
+            )}
+            {isOwner && (
+              <Link href={`/dashboard?cam=${cam.id}`} className={buttonClass({ variant: "primary" })}>
+                <Settings className="size-4" /> Gérer
+              </Link>
+            )}
+            <div className="flex gap-1 sm:ml-auto">
               {REACTIONS.map((e) => (
-                <button key={e} className="reaction-btn" onClick={() => react(e)} aria-label={`Réagir ${e}`}>
+                <button
+                  key={e}
+                  onClick={() => react(e)}
+                  aria-label={`Réagir ${e}`}
+                  className="grid size-10 place-items-center rounded-lg bg-panel-3 text-lg transition hover:-translate-y-0.5 hover:bg-line-strong active:scale-90"
+                >
                   {e}
                 </button>
               ))}
             </div>
           </div>
+        </section>
 
-          <div className="owner-row">
-            <Link href={`/u/${cam.owner}`}>
-              <Avatar name={cam.owner} size={44} />
-            </Link>
-            <div className="grow">
-              <Link href={`/u/${cam.owner}`} style={{ fontWeight: 700 }}>
-                @{cam.owner}
-              </Link>
-              <div className="muted small row" style={{ gap: 6 }}>
-                <Calendar size={13} /> Caméra créée le {formatDate(cam.created_at)}
-              </div>
-            </div>
-            {!isOwner && (
-              <>
-                {currentUserId && (
-                  <Link href={`/messages/${cam.owner}`} className="btn btn-sm" title="Message privé">
-                    <MessageCircle size={14} /> Message
-                  </Link>
-                )}
-                <FollowButton
-                  userId={cam.owner_id}
-                  username={cam.owner}
-                  initial={isFollowing}
-                  followers={followers}
-                  loggedIn={!!currentUserId}
-                  small
-                />
-              </>
-            )}
-          </div>
-
-          {cam.description && (
-            <p className="description" style={{ marginTop: 16 }}>
-              {cam.description}
-            </p>
+        <Chat
+          className={cn(
+            "h-[60vh] min-h-96 border-y [grid-area:chat]",
+            theater ? "lg:h-[520px]" : "lg:sticky lg:top-[4.75rem] lg:h-[calc(100dvh-6.5rem)] lg:self-start",
           )}
-        </div>
+          streamId={cam.id}
+          ownerId={cam.owner_id}
+          initialComments={comments}
+          currentUserId={currentUserId}
+          isOwner={isOwner}
+          isBanned={isBanned}
+          viewers={viewers}
+        />
 
-        <div className="card">
-          <div className="card-header">
-            <div className="tabs">
-              <button className={cn("tab", mediaTab === "clips" && "active")} onClick={() => setMediaTab("clips")}>
-                <Scissors size={14} /> Clips <span className="count">{clips.length}</span>
-              </button>
-              <button className={cn("tab", mediaTab === "replays" && "active")} onClick={() => setMediaTab("replays")}>
-                <PlayCircle size={14} /> Replays <span className="count">{replays.length}</span>
-              </button>
-            </div>
-          </div>
-          <div className="card-body">
-            {mediaTab === "clips" ? (
-              <ClipList clips={clips} empty="Aucun clip. Pendant un direct, clique sur « Clip » pour garder un moment fort." />
+        <div className="flex min-w-0 flex-col gap-4 px-3 pb-4 [grid-area:media] sm:px-5 lg:px-0">
+          <Card className="p-4 sm:p-5">
+            <h2 className="mb-2 font-bold">À propos</h2>
+            {cam.description ? (
+              <p className="text-sm whitespace-pre-wrap text-ink-muted">{cam.description}</p>
             ) : (
-              <ReplayList replays={replays} empty="Les directs terminés apparaîtront ici." />
+              <p className="text-sm text-ink-dim">Pas de description.</p>
             )}
-          </div>
-        </div>
-      </div>
+            <p className="mt-3 text-xs text-ink-dim">Caméra créée le {formatDate(cam.created_at)}</p>
+          </Card>
 
-      <Chat
-        streamId={cam.id}
-        ownerId={cam.owner_id}
-        initialComments={comments}
-        currentUserId={currentUserId}
-        isOwner={isOwner}
-        isBanned={isBanned}
-        viewers={viewers}
-      />
+          <Card>
+            <div className="border-b border-line p-3">
+              <Tabs
+                value={mediaTab}
+                onChange={setMediaTab}
+                items={[
+                  { value: "clips", label: "Clips", icon: <Scissors className="size-4" />, count: clips.length },
+                  { value: "replays", label: "Replays", icon: <PlayCircle className="size-4" />, count: replays.length },
+                ]}
+              />
+            </div>
+            <div className="p-4 sm:p-5">
+              {mediaTab === "clips" ? (
+                <ClipList clips={clips} empty="Aucun clip. Pendant un direct, clique sur « Clip » pour garder un moment fort." />
+              ) : (
+                <ReplayList replays={replays} empty="Les directs terminés apparaîtront ici." />
+              )}
+            </div>
+          </Card>
+        </div>
 
       {clipping && <ClipDialog streamId={cam.id} streamTitle={cam.title} onClose={() => setClipping(false)} />}
     </div>

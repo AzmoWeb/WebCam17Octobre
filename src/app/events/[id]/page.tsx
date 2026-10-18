@@ -1,15 +1,15 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
+import { z } from "zod";
 import { createClient, getCurrentUser } from "@/lib/supabase/server";
 import { getStreamSummaries } from "@/lib/streams";
 import EventView, { type EventDetail } from "./EventView";
 import type { EventComment } from "./EventChat";
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 type Params = { params: Promise<{ id: string }> };
 
 async function loadEvent(id: string) {
-  if (!UUID.test(id)) return null;
+  if (!z.string().uuid().safeParse(id).success) return null;
   const supabase = await createClient();
   const { data } = await supabase
     .from("events")
@@ -32,7 +32,12 @@ export default async function EventPage({ params }: Params) {
   const supabase = await createClient();
   const [streams, { data: comments }, user] = await Promise.all([
     getStreamSummaries({ eventId: id }),
-    supabase.from("event_comments").select("*").eq("event_id", id).order("created_at", { ascending: false }).limit(100),
+    supabase
+      .from("event_comments")
+      .select("id, event_id, user_id, username, content, created_at")
+      .eq("event_id", id)
+      .order("created_at", { ascending: false })
+      .limit(100),
     getCurrentUser(),
   ]);
 

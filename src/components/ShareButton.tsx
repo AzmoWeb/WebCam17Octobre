@@ -1,9 +1,10 @@
 "use client";
 
 import { Share2 } from "lucide-react";
+import { Button } from "@/components/ui";
 import { useUI } from "./UIProvider";
 
-export default function ShareButton({ title, className = "btn" }: { title: string; className?: string }) {
+export default function ShareButton({ title }: { title: string }) {
   const { toast } = useUI();
 
   async function share() {
@@ -12,16 +13,14 @@ export default function ShareButton({ title, className = "btn" }: { title: strin
       if (navigator.share) await navigator.share({ title, url });
       else {
         await navigator.clipboard.writeText(url);
-        toast("Lien copié dans le presse-papiers");
+        toast("Lien copié");
       }
-    } catch {
-      // Partage annulé.
-    }
+    } catch {}
   }
 
   return (
-    <button className={className} onClick={share}>
-      <Share2 size={16} /> Partager
-    </button>
+    <Button onClick={share}>
+      <Share2 className="size-4" /> Partager
+    </Button>
   );
 }

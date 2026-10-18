@@ -2,88 +2,93 @@
 
 import { useState } from "react";
 import { BookOpen, Camera, Monitor, Smartphone, Terminal } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { Card, CardHeader } from "@/components/ui";
+import Tabs from "@/components/ui/Tabs";
 
 type Tab = "obs" | "ipcam" | "mobile" | "ffmpeg";
 
-export default function SetupGuide({ rtmpUrl }: { rtmpUrl: string }) {
+function Steps({ children }: { children: React.ReactNode }) {
+  return <ol className="flex list-none flex-col gap-3.5 [counter-reset:step]">{children}</ol>;
+}
+
+function Step({ children }: { children: React.ReactNode }) {
+  return (
+    <li className="flex gap-3 text-sm text-ink-muted [counter-increment:step] before:grid before:size-6 before:shrink-0 before:place-items-center before:rounded-full before:bg-brand/15 before:text-xs before:font-extrabold before:text-brand-hover before:content-[counter(step)]">
+      <span className="pt-0.5">{children}</span>
+    </li>
+  );
+}
+
+const Code = ({ children }: { children: React.ReactNode }) => (
+  <code className="rounded border border-line bg-panel-2 px-1.5 py-0.5 font-mono text-xs break-all text-ink">{children}</code>
+);
+
+export default function SetupGuide({ rtmpUrl, streamId }: { rtmpUrl: string; streamId: string }) {
   const [tab, setTab] = useState<Tab>("obs");
-  const tabs: { id: Tab; label: string; icon: React.ReactNode }[] = [
-    { id: "obs", label: "OBS Studio", icon: <Monitor size={15} /> },
-    { id: "ipcam", label: "Caméra IP", icon: <Camera size={15} /> },
-    { id: "mobile", label: "Téléphone", icon: <Smartphone size={15} /> },
-    { id: "ffmpeg", label: "Test (ffmpeg)", icon: <Terminal size={15} /> },
-  ];
 
   return (
-    <div className="card">
-      <div className="card-header">
-        <h3>
-          <BookOpen size={18} /> Guide de démarrage
-        </h3>
-      </div>
-      <div className="card-body stack" style={{ gap: 18 }}>
-        <div className="tabs" style={{ alignSelf: "flex-start", maxWidth: "100%" }}>
-          {tabs.map((t) => (
-            <button key={t.id} className={cn("tab", tab === t.id && "active")} onClick={() => setTab(t.id)}>
-              {t.icon} {t.label}
-            </button>
-          ))}
-        </div>
+    <Card>
+      <CardHeader icon={<BookOpen className="size-[18px]" />} title="Guide de démarrage" />
+      <div className="flex flex-col gap-5 p-4 sm:p-5">
+        <Tabs
+          value={tab}
+          onChange={setTab}
+          className="self-start"
+          items={[
+            { value: "obs", label: "OBS", icon: <Monitor className="size-4" /> },
+            { value: "ipcam", label: "Caméra IP", icon: <Camera className="size-4" /> },
+            { value: "mobile", label: "Téléphone", icon: <Smartphone className="size-4" /> },
+            { value: "ffmpeg", label: "Test", icon: <Terminal className="size-4" /> },
+          ]}
+        />
 
         {tab === "obs" && (
-          <ol className="steps">
-            <li>Ouvre OBS → <strong>Paramètres</strong> → <strong>Stream</strong>.</li>
-            <li>
-              Service : <strong>Personnalisé…</strong>. Serveur : <code>{rtmpUrl}</code>
-            </li>
-            <li>Colle ta <strong>clé de stream</strong> (bouton « Copier » ci-dessus) puis valide.</li>
-            <li>
-              Dans <strong>Sortie</strong> (mode avancé), règle l&apos;<strong>intervalle d&apos;images clés</strong> sur{" "}
-              <code>1 s</code> pour réduire le délai.
-            </li>
-            <li>
-              Clique sur <strong>Commencer le streaming</strong> : le badge « En direct » apparaît ici en quelques
-              secondes.
-            </li>
-          </ol>
+          <Steps>
+            <Step>
+              OBS → <strong className="text-ink">Paramètres</strong> → <strong className="text-ink">Stream</strong> → Service « Personnalisé ».
+            </Step>
+            <Step>
+              Serveur : <Code>{rtmpUrl}</Code>
+            </Step>
+            <Step>
+              Clé de stream : <Code>{streamId}?key=TA_CLE</Code> (bouton « Copier » ci-dessus).
+            </Step>
+            <Step>Sortie (mode avancé) : intervalle d&apos;images clés à 1 s pour réduire le délai.</Step>
+            <Step>« Commencer le streaming » : le badge En direct apparaît en quelques secondes.</Step>
+          </Steps>
         )}
-
         {tab === "ipcam" && (
-          <ol className="steps">
-            <li>Ouvre l&apos;interface web de ta caméra (souvent dans « Réseau » → « RTMP » ou « Diffusion »).</li>
-            <li>Active la diffusion RTMP.</li>
-            <li>Colle l&apos;<strong>URL complète</strong> (avec la clé) dans le champ URL / adresse du serveur.</li>
-            <li>
-              Si ta caméra ne fait que du RTSP en « push », utilise <code>{rtmpUrl.replace(/^rtmp:\/\/([^/:]+).*/, "rtsp://$1:8554/live")}/&lt;clé&gt;</code>.
-            </li>
-            <li>Enregistre : la caméra se connecte automatiquement, même après une coupure.</li>
-          </ol>
+          <Steps>
+            <Step>Ouvre l&apos;interface web de la caméra (Réseau → RTMP / Diffusion).</Step>
+            <Step>Active la diffusion RTMP et colle l&apos;URL complète (avec la clé).</Step>
+            <Step>
+              Caméra RTSP uniquement : <Code>{rtmpUrl.replace(/^rtmp:\/\/([^/:]+).*/, "rtsp://$1:8554/live")}/{streamId}?key=TA_CLE</Code>
+            </Step>
+            <Step>Enregistre : la caméra se reconnecte toute seule après une coupure.</Step>
+          </Steps>
         )}
-
         {tab === "mobile" && (
-          <ol className="steps">
-            <li>
-              Installe une appli de diffusion RTMP, par exemple <strong>Larix Broadcaster</strong> (iOS / Android, gratuite).
-            </li>
-            <li>Ajoute une connexion et colle l&apos;<strong>URL complète</strong> avec ta clé.</li>
-            <li>Choisis une résolution 720p à 30 i/s pour un bon compromis qualité / réseau mobile.</li>
-            <li>Appuie sur le bouton d&apos;enregistrement : tu es en direct.</li>
-          </ol>
+          <Steps>
+            <Step>
+              Installe une appli RTMP, par exemple <strong className="text-ink">Larix Broadcaster</strong> (gratuite).
+            </Step>
+            <Step>Nouvelle connexion → colle l&apos;URL complète avec ta clé.</Step>
+            <Step>720p à 30 i/s : bon compromis qualité / réseau mobile.</Step>
+            <Step>Appuie sur le bouton rouge : tu es en direct.</Step>
+          </Steps>
         )}
-
         {tab === "ffmpeg" && (
-          <div className="stack">
-            <p className="text-2 small">Envoie une mire de test sans caméra (remplace TA_CLE par ta clé) :</p>
-            <div className="code-block">
+          <div className="flex flex-col gap-2">
+            <p className="text-sm text-ink-muted">Mire de test sans caméra (remplace TA_CLE) :</p>
+            <pre className="overflow-x-auto rounded-lg bg-black p-3.5 font-mono text-xs text-ink-muted">
               {`ffmpeg -re -f lavfi -i testsrc=size=1280x720:rate=30 \\
   -f lavfi -i sine -c:v libx264 -preset veryfast \\
-  -tune zerolatency -g 30 -c:a aac \\
-  -f flv ${rtmpUrl}/TA_CLE`}
-            </div>
+  -tune zerolatency -g 30 -c:a aac -f flv \\
+  "${rtmpUrl}/${streamId}?key=TA_CLE"`}
+            </pre>
           </div>
         )}
       </div>
-    </div>
+    </Card>
   );
 }

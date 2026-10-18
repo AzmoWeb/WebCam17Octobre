@@ -6,19 +6,21 @@ import {
   Camera,
   Check,
   Gauge,
+  Loader2,
   Maximize,
-  Scissors,
   Minimize,
   Pause,
   PictureInPicture2,
   Play,
   RectangleHorizontal,
+  Scissors,
   Volume2,
   VolumeX,
   WifiOff,
 } from "lucide-react";
 import { useUI } from "@/components/UIProvider";
 import Countdown from "@/components/Countdown";
+import { LiveBadge } from "@/components/ui";
 import { cn, formatDateTime } from "@/lib/utils";
 
 export type Reaction = { id: number; emoji: string; left: number; drift: number };
@@ -38,35 +40,28 @@ type Props = {
 const QUALITY_OPTIONS = [
   { value: "", label: "Source" },
   { value: "720", label: "720p" },
-  { value: "480", label: "480p (économie de données)" },
+  { value: "480", label: "480p · économie de données" },
 ];
 
-// Attend que la caméra soit en direct (polling du statut), puis lit le flux HLS
+const ctrl = "grid size-9 place-items-center rounded-md text-white transition hover:bg-white/15";
+
+// Attend que la caméra soit en direct (relève du statut), puis lit le flux HLS
 // avec des contrôles maison : direct, volume, qualité, clip, capture, PiP, mode cinéma, plein écran.
-export default function Player({
-  streamId,
-  title,
-  initiallyLive,
-  onLiveChange,
-  theater,
-  onToggleTheater,
-  reactions,
-  scheduledAt,
-  onClip,
-}: Props) {
+export default function Player({ streamId, title, initiallyLive, onLiveChange, theater, onToggleTheater, reactions, scheduledAt, onClip }: Props) {
   const { toast } = useUI();
-  const [quality, setQuality] = useState("");
-  const [qualityMenu, setQualityMenu] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<Hls | null>(null);
 
   const [live, setLiveState] = useState(initiallyLive);
+  const [buffering, setBuffering] = useState(initiallyLive);
   const [playing, setPlaying] = useState(false);
   const [muted, setMuted] = useState(true);
   const [volume, setVolume] = useState(0.8);
   const [fullscreen, setFullscreen] = useState(false);
   const [latency, setLatency] = useState<number | null>(null);
+  const [quality, setQuality] = useState("");
+  const [qualityMenu, setQualityMenu] = useState(false);
 
   const setLive = useCallback(
     (v: boolean) => {
@@ -76,17 +71,14 @@ export default function Player({
     [onLiveChange],
   );
 
-  // Polling du statut tant que la caméra est hors ligne.
+  // Relève du statut tant que la caméra est hors ligne.
   useEffect(() => {
     if (live) return;
     const timer = setInterval(async () => {
       try {
         const res = await fetch(`/api/streams/${streamId}/status`, { cache: "no-store" });
-        const { live } = (await res.json()) as { live: boolean };
-        if (live) setLive(true);
-      } catch {
-        // Réessaie au prochain tour.
-      }
+        if (((await res.json()) as { live: boolean }).live) setLive(true);
+      } catch {}
     }, 5000);
     return () => clearInterval(timer);
   }, [live, streamId, setLive]);
@@ -95,6 +87,7 @@ export default function Player({
   useEffect(() => {
     const video = videoRef.current;
     if (!live || !video) return;
+    setBuffering(true);
     const src = `/api/hls/${streamId}/${quality ? `q${quality}/` : ""}index.m3u8`;
 
     if (Hls.isSupported()) {
@@ -107,7 +100,6 @@ export default function Player({
         if (!data.fatal) return;
         if (data.type === Hls.ErrorTypes.MEDIA_ERROR) hls.recoverMediaError();
         else if (quality) {
-          // Qualité réduite indisponible (ffmpeg absent sur le serveur ?) : retour à la source.
           toast("Cette qualité n'est pas disponible pour le moment.", "error");
           setQuality("");
         } else setLive(false);
@@ -131,7 +123,6 @@ export default function Player({
     }
   }, [live, streamId, setLive, quality, toast]);
 
-  // Latence par rapport au direct.
   useEffect(() => {
     if (!live) return;
     const timer = setInterval(() => {
@@ -194,7 +185,7 @@ export default function Player({
     canvas.height = v.videoHeight;
     canvas.getContext("2d")?.drawImage(v, 0, 0);
     const a = document.createElement("a");
-    a.download = `${title.replace(/[^\w-]+/g, "_")}_${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.png`;
+    a.download = `${title.replace(/[^\w-]+/g, "_").slice(0, 60)}_${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.png`;
     a.href = canvas.toDataURL("image/png");
     a.click();
     toast("Capture enregistrée");
@@ -204,12 +195,10 @@ export default function Player({
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement).tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || e.ctrlKey || e.metaKey) return;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || e.ctrlKey || e.metaKey || e.altKey) return;
       const k = e.key.toLowerCase();
-      if (k === "k" || (k === " " && e.target === document.body)) {
-        e.preventDefault();
-        togglePlay();
-      } else if (k === "m") toggleMute();
+      if (k === "k") togglePlay();
+      else if (k === "m") toggleMute();
       else if (k === "f") toggleFullscreen();
       else if (k === "t") onToggleTheater();
     };
@@ -218,29 +207,34 @@ export default function Player({
   }, [togglePlay, toggleMute, toggleFullscreen, onToggleTheater]);
 
   const atEdge = latency === null || latency < 6;
+  const upcoming = scheduledAt && new Date(scheduledAt).getTime() > Date.now();
 
   return (
-    <div ref={wrapRef} className={cn("player", !playing && "paused")}>
+    <div ref={wrapRef} className={cn("group/player relative aspect-video w-full overflow-hidden bg-black sm:rounded-xl", fullscreen && "rounded-none")}>
       <video
         ref={videoRef}
         muted={muted}
         playsInline
         autoPlay
+        className="size-full bg-black"
         onClick={togglePlay}
         onDoubleClick={toggleFullscreen}
         onPlay={() => setPlaying(true)}
         onPause={() => setPlaying(false)}
+        onPlaying={() => setBuffering(false)}
+        onWaiting={() => setBuffering(true)}
         onVolumeChange={(e) => {
           setMuted(e.currentTarget.muted);
           setVolume(e.currentTarget.volume);
         }}
       />
 
-      <div className="reactions-layer">
+      {/* Réactions flottantes */}
+      <div className="pointer-events-none absolute inset-0 z-10 overflow-hidden">
         {reactions.map((r) => (
           <span
             key={r.id}
-            className="floating-reaction"
+            className="absolute bottom-16 animate-float-up text-3xl drop-shadow-lg"
             style={{ left: `${r.left}%`, ["--drift" as string]: `${r.drift}px` }}
           >
             {r.emoji}
@@ -250,24 +244,34 @@ export default function Player({
 
       {live ? (
         <>
-          <div className="player-top">
-            <span className="badge badge-live">EN DIRECT</span>
+          {buffering && (
+            <div className="pointer-events-none absolute inset-0 z-10 grid place-items-center">
+              <Loader2 className="size-10 animate-spin text-white/80" />
+            </div>
+          )}
+          <div className="pointer-events-none absolute top-3 left-3 z-20">
+            <LiveBadge />
           </div>
-          <div className="player-controls">
-            <button className="pc-btn" onClick={togglePlay} title={playing ? "Pause (k)" : "Lecture (k)"}>
-              {playing ? <Pause size={20} /> : <Play size={20} />}
+          <div
+            className={cn(
+              "absolute inset-x-0 bottom-0 z-20 flex items-center gap-1 bg-gradient-to-t from-black/85 to-transparent px-2 pt-10 pb-2 transition-opacity sm:px-3",
+              playing ? "opacity-0 group-hover/player:opacity-100 focus-within:opacity-100" : "opacity-100",
+            )}
+          >
+            <button className={ctrl} onClick={togglePlay} aria-label={playing ? "Pause (k)" : "Lecture (k)"}>
+              {playing ? <Pause className="size-5" /> : <Play className="size-5" />}
             </button>
-            <button className="pc-btn" onClick={toggleMute} title="Son (m)">
-              {muted || volume === 0 ? <VolumeX size={20} /> : <Volume2 size={20} />}
+            <button className={ctrl} onClick={toggleMute} aria-label="Son (m)">
+              {muted || volume === 0 ? <VolumeX className="size-5" /> : <Volume2 className="size-5" />}
             </button>
             <input
-              className="volume"
               type="range"
               min={0}
               max={1}
               step={0.05}
               value={muted ? 0 : volume}
               aria-label="Volume"
+              className="hidden w-20 accent-white sm:block"
               onChange={(e) => {
                 const v = videoRef.current;
                 if (!v) return;
@@ -275,67 +279,71 @@ export default function Player({
                 v.muted = v.volume === 0;
               }}
             />
-            <button className={cn("pc-live", atEdge && "at-edge")} onClick={goLive} title="Revenir au direct">
-              <span className="live-dot" /> DIRECT
+            <button
+              onClick={goLive}
+              className="ml-1 inline-flex h-7 items-center gap-1.5 rounded-md bg-white/15 px-2 text-xs font-bold text-white hover:bg-white/25"
+              title="Revenir au direct"
+            >
+              <span className={cn("size-2 rounded-full", atEdge ? "bg-live" : "bg-white/50")} /> DIRECT
             </button>
-            {latency !== null && <span className="pc-info">Délai {latency.toFixed(1)} s</span>}
-            <span className="grow" />
+            {latency !== null && <span className="ml-1 hidden text-xs text-white/70 md:inline">Délai {latency.toFixed(1)} s</span>}
+            <span className="flex-1" />
             {onClip && (
-              <button className="pc-btn" onClick={onClip} title="Créer un clip des dernières secondes">
-                <Scissors size={19} />
+              <button className={ctrl} onClick={onClip} aria-label="Créer un clip" title="Créer un clip">
+                <Scissors className="size-[18px]" />
               </button>
             )}
-            <div style={{ position: "relative" }}>
-              <button className="pc-btn" onClick={() => setQualityMenu((o) => !o)} title="Qualité">
-                <Gauge size={19} />
+            <div className="relative">
+              <button className={ctrl} onClick={() => setQualityMenu((o) => !o)} aria-label="Qualité" title="Qualité">
+                <Gauge className="size-[18px]" />
               </button>
               {qualityMenu && (
-                <div className="dropdown-menu" style={{ bottom: "calc(100% + 8px)", top: "auto", minWidth: 220 }}>
+                <div className="absolute right-0 bottom-full mb-2 w-56 animate-pop rounded-lg border border-line bg-panel-2 p-1 shadow-2xl">
                   {QUALITY_OPTIONS.map((q) => (
                     <button
                       key={q.value}
-                      className="dropdown-item"
+                      className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm hover:bg-panel-3"
                       onClick={() => {
                         setQuality(q.value);
                         setQualityMenu(false);
                       }}
                     >
-                      <span style={{ width: 16 }}>{quality === q.value && <Check size={15} />}</span>
+                      <span className="w-4">{quality === q.value && <Check className="size-4 text-brand-hover" />}</span>
                       {q.label}
                     </button>
                   ))}
                 </div>
               )}
             </div>
-            <button className="pc-btn" onClick={screenshot} title="Capture d'écran">
-              <Camera size={19} />
+            <button className={cn(ctrl, "hidden sm:grid")} onClick={screenshot} aria-label="Capture d'écran" title="Capture">
+              <Camera className="size-[18px]" />
             </button>
-            <button className="pc-btn" onClick={pip} title="Picture-in-picture">
-              <PictureInPicture2 size={19} />
+            <button className={cn(ctrl, "hidden sm:grid")} onClick={pip} aria-label="Picture-in-picture" title="Picture-in-picture">
+              <PictureInPicture2 className="size-[18px]" />
             </button>
-            <button className="pc-btn" onClick={onToggleTheater} title={theater ? "Mode normal (t)" : "Mode cinéma (t)"}>
-              <RectangleHorizontal size={19} />
+            <button className={cn(ctrl, "hidden lg:grid")} onClick={onToggleTheater} aria-label="Mode cinéma (t)" title={theater ? "Mode normal" : "Mode cinéma"}>
+              <RectangleHorizontal className="size-[18px]" />
             </button>
-            <button className="pc-btn" onClick={toggleFullscreen} title="Plein écran (f)">
-              {fullscreen ? <Minimize size={19} /> : <Maximize size={19} />}
+            <button className={ctrl} onClick={toggleFullscreen} aria-label="Plein écran (f)">
+              {fullscreen ? <Minimize className="size-[18px]" /> : <Maximize className="size-[18px]" />}
             </button>
           </div>
         </>
       ) : (
-        <div className="player-offline">
-          <div className="offline-icon">
-            <WifiOff size={30} />
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-[radial-gradient(circle_at_center,rgba(145,71,255,0.25),transparent_60%)] p-5 text-center">
+          <div className="grid size-16 place-items-center rounded-full border border-white/10 bg-white/5 text-white/80">
+            <WifiOff className="size-7" />
           </div>
-          {scheduledAt && new Date(scheduledAt).getTime() > Date.now() ? (
+          {upcoming ? (
             <>
-              <strong style={{ fontSize: 18, color: "#fff" }}>Direct prévu {formatDateTime(scheduledAt)}</strong>
-              <Countdown to={scheduledAt} />
+              <strong className="text-lg text-white">Direct prévu {formatDateTime(scheduledAt!)}</strong>
+              <Countdown to={scheduledAt!} />
             </>
           ) : (
-            <strong style={{ fontSize: 18, color: "#fff" }}>Caméra hors ligne</strong>
+            <strong className="text-lg text-white">Caméra hors ligne</strong>
           )}
-          <span className="row small" style={{ justifyContent: "center" }}>
-            <span className="spinner" /> En attente du direct — la vidéo démarrera automatiquement
+          <span className="flex items-center gap-2 text-sm text-white/70">
+            <Loader2 className="size-4 animate-spin" /> La vidéo démarrera automatiquement
           </span>
         </div>
       )}

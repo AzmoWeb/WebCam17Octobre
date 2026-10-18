@@ -1,39 +1,33 @@
 import "server-only";
 import { createClient } from "@supabase/supabase-js";
+import { hashKey } from "@/lib/keys";
 
-// Client service_role : contourne la RLS. Uniquement pour le code serveur
-// qui a besoin des clés de stream (hook MediaMTX, proxy HLS, statut en direct)
-// ou des actions d'administration.
-export const admin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-  { auth: { persistSession: false, autoRefreshToken: false } },
-);
+// Client service_role : contourne la RLS. Uniquement dans du code serveur
+// (hooks MediaMTX, gestion des clés, statistiques, administration).
+export const admin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!, {
+  auth: { persistSession: false, autoRefreshToken: false },
+});
 
-const keyCache = new Map<string, { key: string | null; expires: number }>();
-
-/** Clé de stream d'une caméra, mise en cache 30 s (le proxy HLS l'appelle à chaque segment). */
-export async function getStreamKey(streamId: string): Promise<string | null> {
-  const cached = keyCache.get(streamId);
-  if (cached && cached.expires > Date.now()) return cached.key;
-
-  const { data } = await admin.from("stream_keys").select("key").eq("stream_id", streamId).maybeSingle();
-  const key = (data?.key as string | undefined) ?? null;
-  keyCache.set(streamId, { key, expires: Date.now() + 30_000 });
-  return key;
+/** Vérifie une clé de stream (comparaison des hash) et l'état de la caméra. */
+export async function checkPublishKey(streamId: string, key: string) {
+  const { data } = await admin
+    .from("streams")
+    .select("disabled, owner:profiles!owner_id(is_banned), stream_keys(key_hash)")
+    .eq("id", streamId)
+    .maybeSingle();
+  if (!data) return false;
+  const row = data as unknown as {
+    disabled: boolean;
+    owner: { is_banned: boolean } | null;
+    stream_keys: { key_hash: string } | null;
+  };
+  return !row.disabled && !row.owner?.is_banned && row.stream_keys?.key_hash === hashKey(key);
 }
 
-/** Clé actuelle + anciennes clés (les enregistrements sont rangés par clé). */
-export async function getAllStreamKeys(streamId: string): Promise<string[]> {
-  const [current, { data: history }] = await Promise.all([
-    getStreamKey(streamId),
-    admin.from("stream_key_history").select("key").eq("stream_id", streamId).order("replaced_at", { ascending: false }),
-  ]);
-  return [current, ...(history ?? []).map((h) => h.key as string)].filter((k): k is string => !!k);
-}
-
-/** Id de la caméra correspondant à une clé (actuelle). */
-export async function getStreamIdByKey(key: string): Promise<string | null> {
-  const { data } = await admin.from("stream_keys").select("stream_id").eq("key", key).maybeSingle();
-  return (data?.stream_id as string | undefined) ?? null;
+/** Remplace le hash de la clé d'une caméra. */
+export async function setStreamKeyHash(streamId: string, hash: string) {
+  const { error } = await admin
+    .from("stream_keys")
+    .upsert({ stream_id: streamId, key_hash: hash, updated_at: new Date().toISOString() });
+  return !error;
 }

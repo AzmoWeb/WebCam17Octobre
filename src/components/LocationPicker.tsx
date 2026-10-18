@@ -4,9 +4,13 @@ import { useEffect, useRef } from "react";
 import type { Map as LeafletMap, Marker } from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { Crosshair, X } from "lucide-react";
+import { Button } from "@/components/ui";
 import { useUI } from "./UIProvider";
 
 type Point = { lat: number; lng: number } | null;
+
+// ~10 m de précision : suffisant, et évite de publier une position trop exacte.
+const round = (n: number) => Math.round(n * 10000) / 10000;
 
 /** Mini-carte : clic pour placer la caméra, ou bouton « Ma position ». */
 export default function LocationPicker({ value, onChange }: { value: Point; onChange: (p: Point) => void }) {
@@ -16,20 +20,20 @@ export default function LocationPicker({ value, onChange }: { value: Point; onCh
   const markerRef = useRef<Marker | null>(null);
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
+  const valueRef = useRef(value);
+  valueRef.current = value;
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       const L = (await import("leaflet")).default;
       if (cancelled || !containerRef.current || mapRef.current) return;
-      const map = L.map(containerRef.current).setView(value ? [value.lat, value.lng] : [46.6, 2.4], value ? 14 : 5);
-      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-        maxZoom: 19,
-        attribution: "&copy; OpenStreetMap",
-      }).addTo(map);
+      const v = valueRef.current;
+      const map = L.map(containerRef.current).setView(v ? [v.lat, v.lng] : [46.6, 2.4], v ? 14 : 5);
+      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution: "&copy; OpenStreetMap" }).addTo(map);
       map.on("click", (e) => onChangeRef.current({ lat: round(e.latlng.lat), lng: round(e.latlng.lng) }));
       mapRef.current = map;
-      syncMarker(L, value);
+      sync(L, v);
     })();
     return () => {
       cancelled = true;
@@ -37,14 +41,13 @@ export default function LocationPicker({ value, onChange }: { value: Point; onCh
       mapRef.current = null;
       markerRef.current = null;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
-    if (mapRef.current) import("leaflet").then(({ default: L }) => syncMarker(L, value));
+    if (mapRef.current) import("leaflet").then(({ default: L }) => sync(L, value));
   }, [value]);
 
-  function syncMarker(L: typeof import("leaflet"), p: Point) {
+  function sync(L: typeof import("leaflet"), p: Point) {
     const map = mapRef.current;
     if (!map) return;
     if (!p) {
@@ -52,9 +55,11 @@ export default function LocationPicker({ value, onChange }: { value: Point; onCh
       markerRef.current = null;
       return;
     }
-    const icon = L.divIcon({ className: "", html: '<span class="map-pin live"></span>', iconSize: [22, 22], iconAnchor: [11, 11] });
     if (markerRef.current) markerRef.current.setLatLng([p.lat, p.lng]);
-    else markerRef.current = L.marker([p.lat, p.lng], { icon }).addTo(map);
+    else {
+      const icon = L.divIcon({ className: "", html: '<span class="pin-marker"></span>', iconSize: [20, 20], iconAnchor: [10, 10] });
+      markerRef.current = L.marker([p.lat, p.lng], { icon }).addTo(map);
+    }
   }
 
   function locate() {
@@ -71,26 +76,23 @@ export default function LocationPicker({ value, onChange }: { value: Point; onCh
   }
 
   return (
-    <div className="stack" style={{ gap: 8 }}>
-      <div ref={containerRef} className="location-picker" />
-      <div className="row between">
-        <span className="tiny muted">
+    <div className="flex flex-col gap-2">
+      <div ref={containerRef} className="isolate h-56 overflow-hidden rounded-lg border border-line" />
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className="text-xs text-ink-dim">
           {value ? `${value.lat.toFixed(4)}, ${value.lng.toFixed(4)}` : "Clique sur la carte pour placer ta caméra."}
         </span>
-        <div className="row">
-          <button type="button" className="btn btn-sm" onClick={locate}>
-            <Crosshair size={14} /> Ma position
-          </button>
+        <div className="flex gap-2">
+          <Button size="sm" onClick={locate}>
+            <Crosshair className="size-3.5" /> Ma position
+          </Button>
           {value && (
-            <button type="button" className="btn btn-sm btn-ghost" onClick={() => onChange(null)}>
-              <X size={14} /> Retirer
-            </button>
+            <Button size="sm" variant="ghost" onClick={() => onChange(null)}>
+              <X className="size-3.5" /> Retirer
+            </Button>
           )}
         </div>
       </div>
     </div>
   );
 }
-
-// ~10 m de précision : suffisant, et évite de publier une position trop exacte.
-const round = (n: number) => Math.round(n * 10000) / 10000;

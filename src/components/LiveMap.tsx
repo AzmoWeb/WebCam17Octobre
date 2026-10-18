@@ -3,7 +3,7 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 import type { Map as LeafletMap, Marker } from "leaflet";
 import "leaflet/dist/leaflet.css";
-import { categoryLabel } from "@/lib/utils";
+import { categoryLabel, cn } from "@/lib/utils";
 
 export type MapStream = {
   id: string;
@@ -21,15 +21,19 @@ export type LiveMapHandle = { focus: (id: string) => void };
 
 const FRANCE: [number, number] = [46.6, 2.4];
 
-/** Carte Leaflet / OpenStreetMap avec un marqueur par caméra (rouge clignotant si en direct). */
-const LiveMap = forwardRef<LiveMapHandle, { streams: MapStream[]; height?: number | string }>(function LiveMap(
-  { streams, height = "100%" },
-  ref,
-) {
+// Icône « caméra » (tracé Lucide « video »), constante : aucune donnée utilisateur dans ce HTML.
+const CAMERA_SVG =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m16 13 5.223 3.482a.5.5 0 0 0 .777-.416V7.87a.5.5 0 0 0-.752-.432L16 10.5"/><rect x="2" y="6" width="14" height="12" rx="2"/></svg>';
+
+/** Carte Leaflet / OpenStreetMap (sans clé d'API) : un marqueur caméra par stream à sa position. */
+const LiveMap = forwardRef<LiveMapHandle, { streams: MapStream[]; className?: string }>(function LiveMap({ streams, className }, ref) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<LeafletMap | null>(null);
+  const leafletRef = useRef<typeof import("leaflet") | null>(null);
   const markersRef = useRef(new Map<string, Marker>());
   const fittedRef = useRef(false);
+  const streamsRef = useRef(streams);
+  streamsRef.current = streams;
 
   useImperativeHandle(ref, () => ({
     focus(id) {
@@ -46,35 +50,33 @@ const LiveMap = forwardRef<LiveMapHandle, { streams: MapStream[]; height?: numbe
     (async () => {
       const L = (await import("leaflet")).default;
       if (cancelled || !containerRef.current || mapRef.current) return;
-      const map = L.map(containerRef.current, { zoomControl: true }).setView(FRANCE, 6);
+      leafletRef.current = L;
+      const map = L.map(containerRef.current, { zoomControl: true, worldCopyJump: true }).setView(FRANCE, 6);
       L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
         maxZoom: 19,
         attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
       }).addTo(map);
       mapRef.current = map;
-      syncMarkers(L);
+      sync();
     })();
+    const markers = markersRef.current;
     return () => {
       cancelled = true;
       mapRef.current?.remove();
       mapRef.current = null;
-      markersRef.current.clear();
+      markers.clear();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Mise à jour des marqueurs quand la liste change.
-  useEffect(() => {
-    if (!mapRef.current) return;
-    import("leaflet").then(({ default: L }) => syncMarkers(L));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [streams]);
+  useEffect(() => sync(), [streams]);
 
-  function syncMarkers(L: typeof import("leaflet")) {
+  function sync() {
+    const L = leafletRef.current;
     const map = mapRef.current;
-    if (!map) return;
+    if (!L || !map) return;
+    const list = streamsRef.current;
     const markers = markersRef.current;
-    const ids = new Set(streams.map((s) => s.id));
+    const ids = new Set(list.map((s) => s.id));
 
     for (const [id, m] of markers) {
       if (!ids.has(id)) {
@@ -83,53 +85,60 @@ const LiveMap = forwardRef<LiveMapHandle, { streams: MapStream[]; height?: numbe
       }
     }
 
-    for (const s of streams) {
+    for (const s of list) {
       const icon = L.divIcon({
         className: "",
-        html: `<span class="map-pin ${s.live ? "live" : ""}"></span>`,
-        iconSize: [22, 22],
-        iconAnchor: [11, 11],
-        popupAnchor: [0, -12],
+        html: `<span class="cam-marker ${s.live ? "is-live" : "is-offline"}">${CAMERA_SVG}</span>`,
+        iconSize: [36, 36],
+        iconAnchor: [18, 18],
+        popupAnchor: [0, -18],
       });
       const popup = buildPopup(s);
       const existing = markers.get(s.id);
       if (existing) {
         existing.setLatLng([s.lat, s.lng]).setIcon(icon).setPopupContent(popup).setZIndexOffset(s.live ? 1000 : 0);
       } else {
-        markers.set(
-          s.id,
-          L.marker([s.lat, s.lng], { icon, zIndexOffset: s.live ? 1000 : 0 }).bindPopup(popup).addTo(map),
-        );
+        const marker = L.marker([s.lat, s.lng], { icon, zIndexOffset: s.live ? 1000 : 0, title: s.title, alt: s.title }).bindPopup(popup);
+        markers.set(s.id, marker.addTo(map));
       }
     }
 
-    if (!fittedRef.current && streams.length > 0) {
+    if (!fittedRef.current && list.length > 0) {
       fittedRef.current = true;
-      const bounds = L.latLngBounds(streams.map((s) => [s.lat, s.lng] as [number, number]));
-      map.fitBounds(bounds.pad(0.3), { maxZoom: 13 });
+      map.fitBounds(L.latLngBounds(list.map((s) => [s.lat, s.lng] as [number, number])).pad(0.3), { maxZoom: 13 });
     }
   }
 
-  return <div ref={containerRef} className="live-map" style={{ height }} />;
+  // `isolate` : les calques Leaflet (z-index 400+) restent sous l'en-tête et les menus.
+  return <div ref={containerRef} className={cn("isolate", className)} role="region" aria-label="Carte des caméras" />;
 });
 
-// Popup construite en DOM (pas de HTML injecté depuis les données utilisateur).
+// Aperçu construit en DOM avec textContent : les titres et pseudos ne sont jamais interprétés comme du HTML.
 function buildPopup(s: MapStream) {
-  const root = document.createElement("div");
-  root.className = "map-popup";
-  const status = document.createElement("span");
-  status.className = s.live ? "badge badge-live" : "badge badge-offline";
-  status.textContent = s.live ? `EN DIRECT · ${s.viewers}` : "Hors ligne";
-  const title = document.createElement("strong");
-  title.textContent = s.title;
-  const meta = document.createElement("span");
-  meta.className = "muted small";
-  meta.textContent = `@${s.owner} · ${categoryLabel(s.category)}${s.city ? ` · ${s.city}` : ""}`;
-  const link = document.createElement("a");
-  link.href = `/cam/${s.id}`;
-  link.className = "btn btn-primary btn-sm";
-  link.textContent = s.live ? "Regarder le direct" : "Voir la caméra";
-  root.append(status, title, meta, link);
+  const el = (tag: string, cls: string, text?: string) => {
+    const node = document.createElement(tag);
+    node.className = cls;
+    if (text !== undefined) node.textContent = text;
+    return node;
+  };
+  const root = el("div", "flex w-56 flex-col gap-2");
+  const preview = el("div", "relative grid aspect-video place-items-center overflow-hidden rounded-lg bg-gradient-to-br from-brand-dark to-canvas text-white/80");
+  preview.append(el("span", "text-xs font-semibold", s.live ? "Aperçu en direct" : "Hors ligne"));
+  const badge = el(
+    "span",
+    `absolute top-1.5 left-1.5 rounded px-1.5 py-0.5 text-[10px] font-bold uppercase ${s.live ? "bg-live text-white" : "bg-black/60 text-white"}`,
+    s.live ? `● Live · ${s.viewers} spectateur${s.viewers > 1 ? "s" : ""}` : "Hors ligne",
+  );
+  preview.append(badge);
+  const title = el("strong", "text-sm leading-snug text-ink", s.title);
+  const meta = el("span", "text-xs text-ink-dim", `${s.owner} · ${categoryLabel(s.category)}${s.city ? ` · ${s.city}` : ""}`);
+  const link = el(
+    "a",
+    "inline-flex h-8 items-center justify-center rounded-md bg-brand px-3 text-[13px] font-semibold text-white! hover:bg-brand-hover",
+    s.live ? "Regarder le direct" : "Voir la caméra",
+  ) as HTMLAnchorElement;
+  link.href = `/cam/${encodeURIComponent(s.id)}`;
+  root.append(preview, title, meta, link);
   return root;
 }
 

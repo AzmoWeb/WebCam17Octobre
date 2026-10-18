@@ -3,12 +3,13 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { CalendarDays, LayoutGrid, MapPin, Pencil, Radio, Share2, Trash2, Video } from "lucide-react";
+import { CalendarDays, LayoutGrid, MapPin, Pencil, Radio, Trash2, Video } from "lucide-react";
 import ActionButton from "@/components/ActionButton";
 import Avatar from "@/components/Avatar";
 import Countdown from "@/components/Countdown";
+import ShareButton from "@/components/ShareButton";
 import StreamCard from "@/components/StreamCard";
-import { useUI } from "@/components/UIProvider";
+import { Badge, Button, buttonClass, Card, EmptyState, LiveBadge, SectionTitle } from "@/components/ui";
 import { useViewerCounts } from "@/lib/presence";
 import type { StreamSummary } from "@/lib/streams";
 import { formatDateTime, gradientFor } from "@/lib/utils";
@@ -18,125 +19,112 @@ import EventChat, { type EventComment } from "./EventChat";
 
 export type EventDetail = EventFields & { id: string; owner_id: string; owner: string };
 
-type Props = {
-  event: EventDetail;
-  streams: StreamSummary[];
-  comments: EventComment[];
-  currentUserId: string | null;
-  isAdmin: boolean;
-};
+type Props = { event: EventDetail; streams: StreamSummary[]; comments: EventComment[]; currentUserId: string | null; isAdmin: boolean };
 
 export default function EventView({ event, streams, comments, currentUserId, isAdmin }: Props) {
   const router = useRouter();
-  const { toast } = useUI();
   const viewers = useViewerCounts();
   const [editing, setEditing] = useState(false);
-  const isOwner = currentUserId === event.owner_id;
-  const sorted = [...streams].sort((a, b) => Number(b.live) - Number(a.live) || (viewers[b.id] ?? 0) - (viewers[a.id] ?? 0));
+  const canEdit = currentUserId === event.owner_id || isAdmin;
+  const v = (s: StreamSummary) => viewers[s.id] ?? 0;
+  const sorted = [...streams].sort((a, b) => Number(b.live) - Number(a.live) || v(b) - v(a));
   const live = sorted.filter((s) => s.live);
   const upcoming = new Date(event.starts_at).getTime() > Date.now();
-  const totalViewers = live.reduce((n, s) => n + (viewers[s.id] ?? 0), 0);
-
-  async function share() {
-    await navigator.clipboard.writeText(window.location.href);
-    toast("Lien de l'événement copié");
-  }
+  const totalViewers = live.reduce((n, s) => n + v(s), 0);
 
   return (
-    <div className="cam-layout">
-      <div className="stack-lg" style={{ minWidth: 0 }}>
-        <section className="hero" style={{ background: `${gradientFor(event.id)}`, padding: "40px 32px" }}>
-          <div className="row">
-            {live.length > 0 ? (
-              <span className="badge badge-live">{live.length} CAMÉRA{live.length > 1 ? "S" : ""} EN DIRECT</span>
-            ) : (
-              <span className="badge badge-glass">{upcoming ? "À venir" : "Événement"}</span>
-            )}
-            {totalViewers > 0 && <span className="badge badge-glass">{totalViewers} spectateurs</span>}
-          </div>
-          <h1 style={{ color: "#fff", fontSize: "clamp(28px, 4vw, 42px)" }}>{event.title}</h1>
-          <div className="row" style={{ marginTop: 14, color: "rgba(255,255,255,0.85)", gap: 16 }}>
-            <span className="row" style={{ gap: 6 }}>
-              <CalendarDays size={16} /> {formatDateTime(event.starts_at)}
-            </span>
-            {event.city && (
-              <span className="row" style={{ gap: 6 }}>
-                <MapPin size={16} /> {event.city}
-              </span>
-            )}
-            <span className="row" style={{ gap: 6 }}>
-              <Video size={16} /> {streams.length} caméra{streams.length > 1 ? "s" : ""}
-            </span>
-            <Link href={`/u/${event.owner}`} className="row" style={{ gap: 6 }}>
-              <Avatar name={event.owner} size={22} /> @{event.owner}
-            </Link>
-          </div>
-          {upcoming && (
-            <div style={{ marginTop: 22, color: "rgba(255,255,255,0.75)" }}>
-              <Countdown to={event.starts_at} onDone={() => router.refresh()} />
+    <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_340px] xl:grid-cols-[minmax(0,1fr)_380px]">
+      <div className="flex min-w-0 flex-col gap-6">
+        <section className="relative overflow-hidden rounded-2xl p-5 sm:p-8" style={{ background: gradientFor(event.id) }}>
+          <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-black/10" />
+          <div className="relative flex flex-col gap-4">
+            <div className="flex flex-wrap gap-2">
+              {live.length > 0 ? <LiveBadge label={`${live.length} caméra${live.length > 1 ? "s" : ""} en direct`} /> : <Badge tone="glass">{upcoming ? "À venir" : "Événement"}</Badge>}
+              {totalViewers > 0 && <Badge tone="glass">{totalViewers} spectateurs</Badge>}
             </div>
-          )}
-          <div className="hero-actions">
-            {live.length > 0 && (
-              <Link href={`/mosaique?cams=${live.slice(0, 9).map((s) => s.id).join(",")}`} className="btn btn-lg">
-                <LayoutGrid size={18} /> Tout voir en mosaïque
+            <h1 className="text-2xl font-extrabold text-balance text-white sm:text-4xl">{event.title}</h1>
+            <div className="flex flex-wrap gap-x-5 gap-y-2 text-sm text-white/85">
+              <span className="inline-flex items-center gap-1.5">
+                <CalendarDays className="size-4" /> {formatDateTime(event.starts_at)}
+              </span>
+              {event.city && (
+                <span className="inline-flex items-center gap-1.5">
+                  <MapPin className="size-4" /> {event.city}
+                </span>
+              )}
+              <span className="inline-flex items-center gap-1.5">
+                <Video className="size-4" /> {streams.length} caméra{streams.length > 1 ? "s" : ""}
+              </span>
+              <Link href={`/u/${event.owner}`} className="inline-flex items-center gap-1.5 hover:underline">
+                <Avatar name={event.owner} size="xs" /> {event.owner}
               </Link>
-            )}
-            <button className="btn btn-lg" onClick={share}>
-              <Share2 size={18} /> Partager
-            </button>
-            {(isOwner || isAdmin) && (
-              <>
-                <button className="btn btn-lg" onClick={() => setEditing(true)}>
-                  <Pencil size={18} /> Modifier
-                </button>
-                <ActionButton
-                  action={deleteEvent}
-                  fields={{ id: event.id }}
-                  className="btn btn-lg btn-danger"
-                  confirm={{
-                    title: "Supprimer cet événement ?",
-                    message: "Les caméras rattachées sont conservées, seul l'événement et son chat sont supprimés.",
-                    confirmLabel: "Supprimer",
-                    danger: true,
-                  }}
-                  onDone={() => router.push("/events")}
-                >
-                  <Trash2 size={18} />
-                </ActionButton>
-              </>
-            )}
+            </div>
+            {upcoming && <Countdown to={event.starts_at} onDone={() => router.refresh()} />}
+            <div className="flex flex-wrap gap-2">
+              {live.length > 0 && (
+                <Link href={`/mosaique?cams=${live.slice(0, 9).map((s) => s.id).join(",")}`} className={buttonClass({ variant: "primary" })}>
+                  <LayoutGrid className="size-4" /> Tout voir en mosaïque
+                </Link>
+              )}
+              <ShareButton title={event.title} />
+              {canEdit && (
+                <>
+                  <Button onClick={() => setEditing(true)}>
+                    <Pencil className="size-4" /> Modifier
+                  </Button>
+                  <ActionButton
+                    action={deleteEvent}
+                    fields={{ id: event.id }}
+                    variant="danger"
+                    size="md"
+                    icon
+                    title="Supprimer l'événement"
+                    confirm={{ title: "Supprimer cet événement ?", message: "Les caméras sont conservées ; l'événement et son chat sont supprimés.", confirmLabel: "Supprimer", danger: true }}
+                    redirectTo="/events"
+                  >
+                    <Trash2 className="size-4" />
+                  </ActionButton>
+                </>
+              )}
+            </div>
           </div>
         </section>
 
-        {event.description && <p className="card card-body description">{event.description}</p>}
+        {event.description && (
+          <Card className="p-4 text-sm whitespace-pre-wrap text-ink-muted sm:p-5">{event.description}</Card>
+        )}
 
-        <h2 className="section-title">
-          <Radio size={20} /> Caméras de l&apos;événement
-        </h2>
+        <SectionTitle icon={<Radio className="size-5" />}>Caméras de l&apos;événement</SectionTitle>
         {sorted.length ? (
-          <div className="stream-grid">
+          <div className="grid grid-cols-1 gap-x-4 gap-y-6 sm:grid-cols-2 xl:grid-cols-3">
             {sorted.map((s) => (
-              <StreamCard key={s.id} stream={s} viewers={viewers[s.id] ?? 0} loggedIn={!!currentUserId} />
+              <StreamCard key={s.id} stream={s} viewers={v(s)} loggedIn={!!currentUserId} />
             ))}
           </div>
         ) : (
-          <div className="empty">
-            <div className="empty-icon">
-              <Video size={28} />
-            </div>
-            <h3>Aucune caméra pour l&apos;instant</h3>
-            <p>Dans le Studio, modifie ta caméra et choisis cet événement pour l&apos;y rattacher.</p>
-            {currentUserId && (
-              <Link href="/dashboard" className="btn btn-primary">
-                Ouvrir le Studio
-              </Link>
-            )}
-          </div>
+          <EmptyState
+            icon={<Video className="size-6" />}
+            title="Aucune caméra pour l'instant"
+            action={
+              currentUserId && (
+                <Link href="/dashboard" className={buttonClass({ variant: "primary" })}>
+                  Ouvrir le Studio
+                </Link>
+              )
+            }
+          >
+            Dans le Studio, modifie ta caméra et choisis cet événement pour l&apos;y rattacher.
+          </EmptyState>
         )}
       </div>
 
-      <EventChat eventId={event.id} initial={comments} currentUserId={currentUserId} canModerate={isOwner || isAdmin} />
+      <EventChat
+        className="h-[70vh] lg:sticky lg:top-[4.75rem] lg:h-[calc(100dvh-6.5rem)] lg:self-start"
+        eventId={event.id}
+        initial={comments}
+        currentUserId={currentUserId}
+        canModerate={canEdit}
+      />
 
       {editing && <EventForm initial={event} onClose={() => setEditing(false)} />}
     </div>

@@ -2,8 +2,9 @@
 
 import { useEffect, useState } from "react";
 import { Download, X } from "lucide-react";
+import { Button } from "@/components/ui";
 
-type InstallPrompt = Event & { prompt: () => Promise<void>; userChoice: Promise<{ outcome: string }> };
+type InstallPrompt = Event & { prompt: () => Promise<void> };
 
 /** Enregistre le service worker et propose d'installer l'application (Android / Chrome / Edge). */
 export default function PwaRegister() {
@@ -27,20 +28,23 @@ export default function PwaRegister() {
   if (!prompt) return null;
 
   return (
-    <div className="toast" style={{ position: "fixed", left: 20, bottom: 20, zIndex: 150 }}>
-      <Download size={18} style={{ color: "var(--accent)" }} />
-      <span className="grow">Installer CamManif sur cet appareil ?</span>
-      <button
-        className="btn btn-primary btn-sm"
+    <div className="fixed inset-x-4 bottom-4 z-[150] flex animate-slide-in items-center gap-3 rounded-xl border border-line bg-panel-2 px-4 py-3 text-sm shadow-2xl sm:right-auto sm:left-5 sm:max-w-sm">
+      <Download className="size-5 shrink-0 text-brand-hover" />
+      <span className="flex-1">Installer CamManif sur cet appareil ?</span>
+      <Button
+        size="sm"
+        variant="primary"
         onClick={async () => {
           await prompt.prompt();
           setPrompt(null);
         }}
       >
         Installer
-      </button>
-      <button
-        className="btn btn-ghost btn-icon btn-sm"
+      </Button>
+      <Button
+        size="sm"
+        variant="ghost"
+        icon
         aria-label="Plus tard"
         onClick={() => {
           try {
@@ -49,8 +53,8 @@ export default function PwaRegister() {
           setPrompt(null);
         }}
       >
-        <X size={14} />
-      </button>
+        <X className="size-4" />
+      </Button>
     </div>
   );
 }

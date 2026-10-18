@@ -3,13 +3,22 @@ node_modules/
 out/
 *.tsbuildinfo
 next-env.d.ts
+
+# Secrets : ne jamais versionner
+.env
+.env.local
 .env*.local
-.claude/
-mediamtx/mediamtx.exe
-mediamtx/mediamtx
-*.rar
-*.zip
 env.local
 *.local
-WebCam17Octobre/
+
+# MediaMTX : binaire, config générée (contient le secret des hooks), enregistrements
+mediamtx/mediamtx.exe
+mediamtx/mediamtx
+mediamtx/mediamtx.yml
+mediamtx/recordings/
 recordings/
+
+.claude/
+*.rar
+*.zip
+WebCam17Octobre/

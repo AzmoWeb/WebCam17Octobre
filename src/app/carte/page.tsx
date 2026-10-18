@@ -5,6 +5,5 @@ import MapClient from "./MapClient";
 export const metadata: Metadata = { title: "Carte en direct" };
 
 export default async function MapPage() {
-  const streams = await getStreamSummaries();
-  return <MapClient streams={streams} />;
+  return <MapClient streams={await getStreamSummaries()} />;
 }

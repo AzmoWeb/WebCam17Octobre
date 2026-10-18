@@ -1,24 +1,37 @@
-import { getStreamKey } from "@/lib/supabase/admin";
-import { HLS_URL, publishPath, QUALITIES } from "@/lib/mediamtx";
+import { z } from "zod";
+import { admin } from "@/lib/supabase/admin";
+import { HLS_URL, QUALITIES, streamPath } from "@/lib/mediamtx";
 
-// Proxy HLS : /api/hls/<id caméra>/index.m3u8 -> MediaMTX live/<clé>/index.m3u8.
-// Qualité réduite : /api/hls/<id>/q720/index.m3u8 -> live/<clé>_720/index.m3u8.
-// Les spectateurs ne voient que l'id public de la caméra, jamais la clé.
+// Proxy HLS : /api/hls/<id caméra>/index.m3u8 -> MediaMTX live/<id>/index.m3u8 (127.0.0.1).
+// Qualité réduite : /api/hls/<id>/q720/index.m3u8 -> live/<id>_720/index.m3u8.
+// MediaMTX n'est jamais exposé ; la clé de la caméra n'intervient pas dans la lecture.
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const SAFE_SEGMENT = /^[A-Za-z0-9_.-]+$/;
+const params = z.object({
+  id: z.string().uuid(),
+  file: z.array(z.string().regex(/^[A-Za-z0-9_-][A-Za-z0-9_.-]{0,100}$/)).min(1).max(3),
+});
 const notFound = () => new Response("Not found", { status: 404 });
 
-export async function GET(request: Request, { params }: { params: Promise<{ id: string; file: string[] }> }) {
-  const { id, file } = await params;
-  if (!UUID.test(id) || file.some((s) => !SAFE_SEGMENT.test(s) || s.startsWith("."))) return notFound();
+// Caméras existantes et non coupées (cache 30 s : appelé à chaque segment).
+const allowed = new Map<string, { ok: boolean; expires: number }>();
+async function streamPlayable(id: string) {
+  const cached = allowed.get(id);
+  if (cached && cached.expires > Date.now()) return cached.ok;
+  const { data } = await admin.from("streams").select("disabled").eq("id", id).maybeSingle();
+  const ok = !!data && !data.disabled;
+  allowed.set(id, { ok, expires: Date.now() + 30_000 });
+  return ok;
+}
 
-  const key = await getStreamKey(id);
-  if (!key) return notFound();
+export async function GET(request: Request, ctx: { params: Promise<{ id: string; file: string[] }> }) {
+  const parsed = params.safeParse(await ctx.params);
+  if (!parsed.success) return notFound();
+  const { id, file } = parsed.data;
+  if (!(await streamPlayable(id))) return notFound();
 
-  let path = publishPath(key);
+  let path = streamPath(id);
   let rest = file;
-  const quality = /^q(\d+)$/.exec(file[0] ?? "")?.[1];
+  const quality = /^q(\d+)$/.exec(file[0])?.[1];
   if (quality) {
     if (!(QUALITIES as readonly string[]).includes(quality)) return notFound();
     path = `${path}_${quality}`;
@@ -26,22 +39,22 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
   }
   if (rest.length === 0) return notFound();
 
-  // La query string est conservée : LL-HLS l'utilise (_HLS_msn, _HLS_part).
-  const { search } = new URL(request.url);
+  // Seuls les paramètres LL-HLS sont transmis (_HLS_msn, _HLS_part, _HLS_skip).
+  const search = new URLSearchParams();
+  for (const [k, v] of new URL(request.url).searchParams) {
+    if (/^_HLS_(msn|part|skip)$/.test(k) && /^[A-Za-z0-9]{1,20}$/.test(v)) search.set(k, v);
+  }
+  const qs = search.size ? `?${search}` : "";
+
   let upstream: Response;
   try {
-    upstream = await fetch(`${HLS_URL}/${path}/${rest.join("/")}${search}`, {
-      cache: "no-store",
-      signal: request.signal,
-    });
+    upstream = await fetch(`${HLS_URL}/${path}/${rest.join("/")}${qs}`, { cache: "no-store", signal: request.signal });
   } catch {
     return new Response("Flux indisponible", { status: 502 });
   }
 
-  const headers = new Headers();
+  const headers = new Headers({ "cache-control": "no-cache", "x-content-type-options": "nosniff" });
   const contentType = upstream.headers.get("content-type");
   if (contentType) headers.set("content-type", contentType);
-  headers.set("cache-control", "no-cache");
-
-  return new Response(upstream.body, { status: upstream.status, headers });
+  return new Response(upstream.ok ? upstream.body : null, { status: upstream.ok ? 200 : 404, headers });
 }

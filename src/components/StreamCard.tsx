@@ -4,8 +4,9 @@ import Link from "next/link";
 import { CalendarClock, Eye, Heart, MapPin, Video } from "lucide-react";
 import Avatar from "./Avatar";
 import FavoriteButton from "./FavoriteButton";
+import { Badge, LiveBadge } from "@/components/ui";
 import type { StreamSummary } from "@/lib/streams";
-import { categoryLabel, formatDateTime, gradientFor, timeAgo } from "@/lib/utils";
+import { categoryLabel, formatDateTime, gradientFor } from "@/lib/utils";
 
 type Props = {
   stream: StreamSummary;
@@ -15,57 +16,68 @@ type Props = {
 };
 
 export default function StreamCard({ stream: s, viewers, loggedIn, onFavoriteChange }: Props) {
+  const scheduled = !s.live && s.scheduledAt && new Date(s.scheduledAt).getTime() > Date.now();
+
   return (
-    <Link href={`/cam/${s.id}`} className="stream-card">
-      <div className="stream-thumb" style={{ background: gradientFor(s.id) }}>
-        <Video size={44} className="thumb-icon" />
-        <div className="tl">
+    <article className="group flex min-w-0 flex-col gap-2.5">
+      <Link
+        href={`/cam/${s.id}`}
+        className="relative block aspect-video overflow-hidden rounded-xl ring-brand transition-all group-hover:-translate-y-0.5 group-hover:ring-2"
+        style={{ background: gradientFor(s.id) }}
+        aria-label={`Regarder ${s.title}`}
+      >
+        <div className="absolute inset-0 grid place-items-center text-white/80">
+          <Video className="size-10 transition-transform duration-300 group-hover:scale-110" />
+        </div>
+        <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-black/20" />
+        <div className="absolute top-2.5 left-2.5 flex gap-1.5">
           {s.live ? (
-            <span className="badge badge-live">EN DIRECT</span>
-          ) : s.scheduledAt && new Date(s.scheduledAt).getTime() > Date.now() ? (
-            <span className="badge badge-glass" suppressHydrationWarning>
-              <CalendarClock size={12} /> {formatDateTime(s.scheduledAt)}
-            </span>
+            <LiveBadge />
+          ) : scheduled ? (
+            <Badge tone="glass">
+              <CalendarClock className="size-3" />
+              <span suppressHydrationWarning>{formatDateTime(s.scheduledAt!)}</span>
+            </Badge>
           ) : (
-            <span className="badge badge-glass">Hors ligne</span>
+            <Badge tone="glass">Hors ligne</Badge>
           )}
         </div>
-        <div className="tr">
-          <FavoriteButton
-            streamId={s.id}
-            initial={s.isFavorite}
-            loggedIn={loggedIn}
-            variant="overlay"
-            onChange={onFavoriteChange}
-          />
+        <div className="absolute top-2 right-2">
+          <FavoriteButton streamId={s.id} initial={s.isFavorite} loggedIn={loggedIn} variant="overlay" onChange={onFavoriteChange} />
         </div>
-        <div className="bl">
+        <div className="absolute bottom-2.5 left-2.5 flex gap-1.5">
           {s.live && (
-            <span className="badge badge-glass">
-              <Eye size={12} /> {viewers}
-            </span>
+            <Badge tone="glass">
+              <Eye className="size-3" /> {viewers}
+            </Badge>
           )}
-          <span className="badge badge-glass">{categoryLabel(s.category)}</span>
+          <Badge tone="glass">{categoryLabel(s.category)}</Badge>
         </div>
-      </div>
-      <div className="stream-info">
-        <Avatar name={s.owner} size={36} />
-        <div className="grow">
-          <h3 className="truncate">{s.title}</h3>
-          <div className="muted small truncate">@{s.owner}</div>
-          <div className="stream-meta">
+      </Link>
+
+      <div className="flex gap-3">
+        <Link href={`/u/${s.owner}`} aria-label={`Profil de ${s.owner}`}>
+          <Avatar name={s.owner} size="sm" className="mt-0.5" />
+        </Link>
+        <div className="min-w-0 flex-1">
+          <Link href={`/cam/${s.id}`} className="block truncate text-[15px] font-semibold hover:text-brand-hover">
+            {s.title}
+          </Link>
+          <Link href={`/u/${s.owner}`} className="block truncate text-[13px] text-ink-muted hover:text-ink">
+            {s.owner}
+          </Link>
+          <div className="mt-0.5 flex flex-wrap items-center gap-x-3 text-xs text-ink-dim">
             {s.city && (
-              <span>
-                <MapPin size={12} /> {s.city}
+              <span className="inline-flex items-center gap-1">
+                <MapPin className="size-3" /> {s.city}
               </span>
             )}
-            <span>
-              <Heart size={12} /> {s.favorites}
+            <span className="inline-flex items-center gap-1">
+              <Heart className="size-3" /> {s.favorites}
             </span>
-            <span>{timeAgo(s.created_at)}</span>
           </div>
         </div>
       </div>
-    </Link>
+    </article>
   );
 }

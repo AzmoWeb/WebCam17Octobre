@@ -1,40 +1,35 @@
 # CamManif
 
-Site de caméras en direct : chaque utilisateur crée des caméras, reçoit une clé de stream privée
-(`rtmp://ton-serveur/live/CLE_SECRETE`) à coller dans sa caméra ou dans OBS, et les visiteurs regardent
-en HLS avec un chat en temps réel modéré.
+Site de caméras en direct : chaque utilisateur crée des caméras, reçoit une clé de stream privée à coller dans
+sa caméra ou dans OBS, et les visiteurs regardent en HLS avec un chat en temps réel modéré.
 
-**Stack** : Next.js 15 (TypeScript) · Supabase (comptes, Postgres, temps réel) · MediaMTX (RTMP/RTSP → HLS,
-enregistrement) · Leaflet / OpenStreetMap (carte).
+**Stack** : Next.js 15 (TypeScript, Tailwind CSS 4) · Supabase (comptes, Postgres, temps réel) · MediaMTX
+(RTMP/RTSP → HLS, enregistrement) · Leaflet / OpenStreetMap (carte, sans clé d'API) · Zod (validation).
 
 ## Fonctionnalités
 
 | | |
 | --- | --- |
-| **Regarder** | Accueil avec recherche, filtres, onglets En direct / À venir / Abonnements / Favoris · **carte en direct** · **mosaïque** 2 à 9 caméras · lecteur avec qualité (Source / 720p / 480p), capture, PiP, mode cinéma |
-| **Interagir** | Chat temps réel, réactions emoji, compteur de spectateurs, favoris, **abonnements**, **messages privés**, **clips** des 15 / 30 / 60 dernières secondes |
-| **Diffuser** | Studio : clé privée, guide OBS / caméra IP / téléphone, position sur la carte, **direct programmé** (compte à rebours), rattachement à un **événement**, **statistiques** (pic, durée, courbe d'audience), **replays** |
-| **Événements** | Page qui regroupe toutes les caméras d'une manif / d'un événement, avec un chat commun et une vue mosaïque |
-| **Modération** | Signalements, suppression, bannissement par caméra · **admin** : file de signalements du site, bannissement global, suppression de caméras · **anti-spam** (10 messages / min, doublons bloqués, captcha Turnstile facultatif) |
-| **Comptes** | E-mail / mot de passe, **Google**, **GitHub** · profil public avec bio, abonnés, clips et replays |
-| **Mobile** | **Application installable (PWA)**, page hors connexion |
+| **Regarder** | Accueil (recherche, filtres, En direct / À venir / Abonnements / Favoris) · **carte** avec un marqueur caméra par stream · **mosaïque** 2 à 9 caméras · lecteur (qualité, capture, PiP, mode cinéma) |
+| **Interagir** | Chat temps réel, réactions, spectateurs en direct, favoris, abonnements, messages privés, **clips** |
+| **Diffuser** | Studio : clé privée, guide OBS / caméra IP / téléphone, position, direct programmé, événement, **statistiques**, **replays** |
+| **Modérer** | Signalements, suppression, bannissement par caméra · **panel admin** (`/admin`) avec journal d'audit |
+| **Comptes** | E-mail / mot de passe, Google, GitHub · profil public |
+| **Mobile** | Interface mobile d'abord · application installable (PWA) |
 
-> **Floutage des visages** : non inclus. Il faut un pipeline de détection de visages en temps réel
-> (modèle d'IA, idéalement sur GPU) entre MediaMTX et les spectateurs, ce que ni MediaMTX ni ffmpeg ne
-> font seuls. C'est une piste pour une V2 (par exemple un service Python + OpenCV/MediaPipe qui relit le
-> flux et le republie flouté).
+> **Floutage des visages** : non inclus (nécessite un pipeline de détection de visages en temps réel, piste V2).
 
 ## Comment ça marche
 
 ```
-Caméra / OBS ──RTMP──▶ MediaMTX :1935 ──(auth)──▶ Next.js /api/mediamtx/auth → clé valide ? compte banni ?
-                          │  runOnReady / runOnNotReady ──▶ /api/mediamtx/hook (début / fin du direct)
-                          │  enregistrement ./recordings (7 jours)
-                          │  HLS 127.0.0.1:8888 · playback 127.0.0.1:9996 · API 127.0.0.1:9997 (privés)
+Caméra / OBS ──RTMP──▶ MediaMTX :1935  rtmp://serveur/live/<ID_CAMERA>?key=<CLE>
+                          │ ──(auth + secret)──▶ /api/mediamtx/auth : hash(clé) == hash stocké ? caméra active ? compte non banni ?
+                          │ ──(hooks + secret)─▶ /api/mediamtx/hook : début / fin de direct (stats, replays)
+                          │  HLS 127.0.0.1:8888 · playback 127.0.0.1:9996 · API 127.0.0.1:9997 (jamais exposés)
                           ▼
-Spectateur ──HTTP──▶ Next.js /api/hls/<id>/…      (direct, la clé n'est jamais exposée)
-                     Next.js /api/clips/<id>/video, /api/replays/<id>/video  (enregistrements)
-Spectateur ◀──WebSocket──▶ Supabase Realtime (chat, messages, présence, réactions)
+Spectateur ──HTTPS──▶ Next.js /api/hls/<id>/…, /api/clips/<id>/video, /api/replays/<id>/video
+Spectateur ◀──WSS───▶ Supabase Realtime (lecture seule, anonyme : chat public, présence, réactions)
+Écritures ──────────▶ Server actions Next.js (session HttpOnly, Zod, rate limiting, RLS)
 ```
 
 ## Installation (en local, sous Windows)
@@ -42,42 +37,51 @@ Spectateur ◀──WebSocket──▶ Supabase Realtime (chat, messages, prése
 ### 1. Supabase
 
 1. Crée un projet sur <https://supabase.com>.
-2. **SQL Editor** : exécute les 3 fichiers **dans cet ordre**, chacun dans une nouvelle requête :
+2. **SQL Editor** : exécute les fichiers **dans cet ordre**, chacun dans une nouvelle requête :
    1. [supabase/schema.sql](supabase/schema.sql)
    2. [supabase/002_features.sql](supabase/002_features.sql)
    3. [supabase/003_platform.sql](supabase/003_platform.sql)
+   4. [supabase/004_security.sql](supabase/004_security.sql)
 3. **Authentication → URL Configuration** : Site URL = `http://localhost:3000`,
-   et ajoute `http://localhost:3000/auth/callback` dans les Redirect URLs.
-4. (Facultatif, pour tester plus vite) **Authentication → Providers → Email** : désactive
-   « Confirm email ».
-5. Te nommer administrateur (après t'être inscrit sur le site) :
+   Redirect URLs : `http://localhost:3000/auth/callback`.
+4. Te nommer administrateur (après t'être inscrit) :
 
    ```sql
-   update public.profiles set is_admin = true where username = 'TON_PSEUDO';
+   update public.profiles set role = 'admin' where username = 'TON_PSEUDO';
    ```
+
+> **Mise à jour depuis une version précédente** : après `004_security.sql`, les caméras publient sur
+> `rtmp://serveur/live/<ID_CAMERA>?key=<CLE>` (le Studio affiche le nouveau format). Les clés existantes
+> restent valables, seule l'URL change dans OBS.
 
 ### 2. Variables d'environnement
 
-Copie `.env.local.example` en **`.env.local`** (avec le point au début, sans `.txt`) à la racine du projet,
-et remplis les valeurs depuis **Project Settings → API** (URL, clé `anon`, clé `service_role`).
-Next.js ne lit ce fichier qu'au démarrage : relance `npm run dev` après chaque modification.
+Copie `.env.local.example` en **`.env.local`** (point au début, pas de `.txt`) à la racine du projet et remplis
+les valeurs (**Project Settings → API**). Génère un secret pour les hooks MediaMTX :
+
+```bash
+node -e "console.log(require('crypto').randomBytes(24).toString('hex'))"
+```
+
+Next.js ne lit `.env.local` qu'au démarrage : relance `npm run dev` après chaque modification.
 
 ### 3. MediaMTX (+ ffmpeg)
 
-1. Télécharge l'archive Windows (`mediamtx_vX.Y.Z_windows_amd64.zip`) depuis
-   <https://github.com/bluenviron/mediamtx/releases> et place `mediamtx.exe` dans [mediamtx/](mediamtx/).
-2. Dans [mediamtx/mediamtx.yml](mediamtx/mediamtx.yml), remplace les 2 `change-me-hook-secret` par la
-   valeur de `MEDIAMTX_HOOK_SECRET` (`.env.local`).
-3. Pour les qualités 720p / 480p, installe ffmpeg (`winget install Gyan.FFmpeg`). Sans ffmpeg, seule la
-   qualité « Source » fonctionne.
-4. Lance-le :
+1. Télécharge `mediamtx_vX.Y.Z_windows_amd64.zip` depuis <https://github.com/bluenviron/mediamtx/releases> et
+   place `mediamtx.exe` dans [mediamtx/](mediamtx/).
+2. Génère la configuration (injecte `MEDIAMTX_HOOK_SECRET` dans `mediamtx/mediamtx.yml`, non versionné) :
+
+   ```bash
+   npm run mediamtx:config
+   ```
+
+3. Lance MediaMTX :
 
    ```bash
    cd mediamtx; .\mediamtx.exe mediamtx.yml
    ```
 
-Les directs sont enregistrés dans `mediamtx/recordings/` et supprimés après 7 jours
-(`recordDeleteAfter`). Les clips et replays ne sont disponibles que pendant cette durée.
+4. Pour les qualités 720p / 480p : `winget install Gyan.FFmpeg`.
 
 ### 4. Le site
 
@@ -89,69 +93,52 @@ npm install
 npm run dev
 ```
 
-Ouvre <http://localhost:3000>, crée un compte, puis une caméra dans le **Studio**.
-
 ### 5. Envoyer un flux
 
-- **OBS** : Paramètres → Stream → Service « Personnalisé ». Serveur : `rtmp://localhost/live`,
-  Clé : la clé affichée dans le Studio.
-- **Caméra IP / appareil RTMP** : colle l'URL complète `rtmp://localhost/live/<clé>`.
-- **Téléphone** : appli Larix Broadcaster, avec l'URL complète.
-- **Test sans caméra** (si ffmpeg est installé) :
+- **OBS** : Service « Personnalisé », Serveur `rtmp://localhost/live`, Clé `<ID_CAMERA>?key=<CLE>`.
+- **Caméra IP / téléphone** : URL complète `rtmp://localhost/live/<ID_CAMERA>?key=<CLE>`.
 
-  ```bash
-  ffmpeg -re -f lavfi -i testsrc=size=1280x720:rate=30 -f lavfi -i sine -c:v libx264 -preset veryfast -tune zerolatency -g 30 -c:a aac -f flv rtmp://localhost/live/TA_CLE
-  ```
+La clé n'est affichée **qu'une fois**, à la création de la caméra ou après « Régénérer » dans le Studio.
 
-> Pour un délai faible, règle l'intervalle d'images clés à 1 s dans OBS
-> (Sortie → mode Avancé → Intervalle d'images clés = 1).
+## Sécurité
 
-## Options
+| Domaine | Mesures |
+| --- | --- |
+| **Base de données** | RLS sur toutes les tables, policies strictes, droits par colonne (rôle, bannissement et clés non modifiables par les utilisateurs), uniquement des requêtes paramétrées (client Supabase) |
+| **Entrées** | Validation Zod côté serveur de chaque action et route (types, formats, longueurs), nettoyage des textes (caractères de contrôle / invisibles), corps des server actions limités à 100 ko |
+| **XSS** | Aucun `dangerouslySetInnerHTML` ; rendu échappé par React ; popups de carte construites avec `textContent` ; CSP stricte avec nonce par requête |
+| **En-têtes** | CSP, HSTS (prod), X-Frame-Options DENY, X-Content-Type-Options, Referrer-Policy, Permissions-Policy, COOP |
+| **Abus** | Rate limiting en base : connexion (IP + compte), inscription, OAuth, commentaires, signalements, messages, clics, clés ; captcha Turnstile facultatif |
+| **Sessions / CSRF** | Cookies de session HttpOnly, Secure (prod), SameSite=Lax ; écritures via server actions (contrôle d'origine intégré à Next.js) |
+| **Autorisations** | Utilisateur et rôle revérifiés côté serveur à chaque action ; panel admin invisible (404) sans le rôle ; messages d'erreur génériques |
+| **Clés de stream** | Stockées hashées (SHA-256), affichées une seule fois, régénérables, jamais envoyées aux spectateurs ; la lecture passe par l'id public de la caméra |
+| **Secrets** | Seules l'URL Supabase et la clé anon sont publiques ; `SUPABASE_SERVICE_ROLE_KEY`, `MEDIAMTX_*` restent côté serveur ; `.env.local` et `mediamtx.yml` sont dans `.gitignore` |
 
-### Connexion Google / GitHub
+> Les clés présentes dans d'anciens commits restent dans l'historique Git : régénère la clé `service_role`
+> (Supabase → Project Settings → API) si `.env.local` a déjà été poussé.
 
-Supabase → **Authentication → Sign In / Providers** → active **Google** et/ou **GitHub** :
+### Options
 
-- **GitHub** : crée une OAuth App sur <https://github.com/settings/developers> avec comme
-  « Authorization callback URL » l'URL indiquée par Supabase (`https://<projet>.supabase.co/auth/v1/callback`),
-  puis colle le Client ID et le secret dans Supabase.
-- **Google** : crée des identifiants OAuth dans Google Cloud Console (même URL de callback).
-
-Le pseudo est créé automatiquement à partir du compte (modifiable plus tard via SQL si besoin).
-
-### Captcha (anti-robots)
-
-1. Crée un widget **Cloudflare Turnstile** (gratuit) sur <https://dash.cloudflare.com>.
-2. Mets la clé du site dans `NEXT_PUBLIC_TURNSTILE_SITE_KEY` (`.env.local`).
-3. Supabase → **Authentication → Attack Protection** : active le captcha Turnstile avec la clé secrète.
-
-### Application installable
-
-Rien à configurer : en production (HTTPS), Chrome / Edge / Android proposent « Installer CamManif ».
-Sur iPhone : Safari → Partager → « Sur l'écran d'accueil ».
+- **Google / GitHub** : Supabase → Authentication → Sign In / Providers (URL de callback indiquée par Supabase).
+- **Captcha** : widget Cloudflare Turnstile → `NEXT_PUBLIC_TURNSTILE_SITE_KEY` + Supabase → Attack Protection.
 
 ## Mise en production (VPS)
 
-- Fais tourner Next.js (`npm run build` puis `npm start`) et MediaMTX sur le même serveur
-  (services systemd ou pm2), avec un reverse proxy HTTPS (Caddy ou Nginx) devant le port 3000.
-- Ouvre au public uniquement **443** (site) et **1935** (RTMP), plus **8554** si des caméras
-  publient en RTSP. Ne publie jamais 8888 (HLS), 9996 (playback) ni 9997 (API).
-- Mets à jour `NEXT_PUBLIC_SITE_URL`, `NEXT_PUBLIC_RTMP_URL` (`rtmp://ton-domaine/live`), un vrai
-  `MEDIAMTX_HOOK_SECRET`, et l'URL du site dans Supabase.
-- Toute la vidéo transite par Next.js. Au-delà de quelques dizaines de spectateurs, ajoute un cache
-  Nginx/CDN devant `/api/hls/` ou passe à une offre gérée.
-- Prévois de l'espace disque pour les enregistrements (environ 1 Go par heure de direct en 1080p).
+- Next.js (`npm run build` puis `npm start`) et MediaMTX sur le même serveur, derrière un reverse proxy HTTPS
+  (Caddy / Nginx) qui transmet `X-Real-IP` (utilisé par le rate limiting).
+- Ports publics : **443** et **1935** (+ **8554** pour le RTSP). Jamais 8888, 9996 ni 9997.
+- `NEXT_PUBLIC_SITE_URL`, `NEXT_PUBLIC_RTMP_URL`, `MEDIAMTX_HOOK_SECRET` propres à la production, puis
+  `npm run mediamtx:config`.
 
 ## Structure
 
 | Chemin | Rôle |
 | --- | --- |
-| `supabase/*.sql` | Tables, RLS, triggers anti-spam, temps réel (à exécuter dans l'ordre) |
-| `mediamtx/mediamtx.yml` | Serveur vidéo : auth, enregistrement, qualités, hooks |
-| `src/app/api/mediamtx/*` | Hooks MediaMTX (validation des clés, début / fin de direct) |
-| `src/app/api/hls`, `api/clips`, `api/replays` | Proxys vidéo (direct, clips, replays) |
-| `src/app/cam/[id]` | Page caméra : lecteur, chat, réactions, clips, replays |
-| `src/app/carte`, `mosaique`, `events` | Carte en direct, mosaïque, événements |
-| `src/app/dashboard` | Studio : caméras, clé, stats, guide, modération |
-| `src/app/messages`, `u/[username]` | Messages privés, profils |
-| `src/app/admin` | Administration du site |
+| `supabase/*.sql` | Schéma, RLS, triggers, rate limiting (à exécuter dans l'ordre) |
+| `mediamtx/mediamtx.example.yml` | Modèle de config MediaMTX (`npm run mediamtx:config`) |
+| `src/middleware.ts`, `next.config.ts` | CSP avec nonce, en-têtes de sécurité, rafraîchissement de session |
+| `src/lib/validation.ts`, `sanitize.ts`, `ratelimit.ts` | Zod, nettoyage, limitation de débit |
+| `src/app/**/actions.ts` | Server actions (toutes les écritures) |
+| `src/app/api/*` | Hooks MediaMTX, proxys vidéo (direct, clips, replays), statut |
+| `src/components/ui` | Composants Tailwind (boutons, cartes, onglets, états vides / chargement) |
+| `src/app/admin` | Panel d'administration + journal d'audit |

@@ -1,27 +1,26 @@
-# Configuration MediaMTX pour CamManif.
-# Ne contient que les réglages modifiés ; le reste garde les valeurs par défaut.
+# Modèle de configuration MediaMTX pour CamManif.
+# Ne pas modifier mediamtx.yml à la main : il est généré à partir de ce fichier par
+#   npm run mediamtx:config
+# qui y injecte MEDIAMTX_HOOK_SECRET (.env.local). mediamtx.yml n'est pas versionné.
 #
 # Fonctionnement :
-#  - les caméras / OBS publient en RTMP (ou RTSP) sur live/<CLE_SECRETE> ;
-#  - MediaMTX demande au site (authHTTPAddress) si la clé est valide ;
-#  - le HLS, l'API et la lecture des enregistrements n'écoutent que sur 127.0.0.1 :
-#    les spectateurs passent par le site, qui ne révèle jamais la clé ;
+#  - les caméras / OBS publient sur live/<ID_CAMERA>?key=<CLE> (RTMP ou RTSP) ;
+#  - MediaMTX demande au site si la clé est valide (comparaison de hash) ;
+#  - HLS, API et lecture des enregistrements n'écoutent que sur 127.0.0.1 :
+#    les spectateurs passent par le site ;
 #  - chaque direct est enregistré (replays + clips) et signalé au site (hooks).
-#
-# ⚠ Remplace "change-me-hook-secret" (2 fois plus bas) par la même valeur que
-#   MEDIAMTX_HOOK_SECRET dans .env.local.
 
 logLevel: info
 
-# --- Authentification déléguée au site Next.js ---
+# --- Authentification déléguée au site Next.js (secret partagé) ---
 authMethod: http
-authHTTPAddress: http://127.0.0.1:3000/api/mediamtx/auth
+authHTTPAddress: http://127.0.0.1:3000/api/mediamtx/auth?secret=__HOOK_SECRET__
 authHTTPExclude:
   - action: api
   - action: metrics
   - action: pprof
 
-# --- API (statut "en direct"), accessible uniquement en local ---
+# --- API (statut "en direct", coupure), uniquement en local ---
 api: yes
 apiAddress: 127.0.0.1:9997
 
@@ -59,7 +58,7 @@ pathDefaults:
 paths:
   # Qualités réduites, générées à la demande par ffmpeg (seulement si un
   # spectateur les choisit). Nécessite ffmpeg dans le PATH.
-  "~^live/([A-Za-z0-9]+)_(720|480)$":
+  "~^live/([0-9a-f-]{36})_(720|480)$":
     record: no
     runOnDemand: >-
       ffmpeg -hide_banner -loglevel error -rtsp_transport tcp
@@ -73,5 +72,5 @@ paths:
 
   # Toutes les caméras : prévenir le site au début et à la fin du direct.
   all_others:
-    runOnReady: curl -s -X POST "http://127.0.0.1:3000/api/mediamtx/hook?event=ready&path=$MTX_PATH&secret=change-me-hook-secret"
-    runOnNotReady: curl -s -X POST "http://127.0.0.1:3000/api/mediamtx/hook?event=notready&path=$MTX_PATH&secret=change-me-hook-secret"
+    runOnReady: curl -s -X POST "http://127.0.0.1:3000/api/mediamtx/hook?event=ready&path=$MTX_PATH&secret=__HOOK_SECRET__"
+    runOnNotReady: curl -s -X POST "http://127.0.0.1:3000/api/mediamtx/hook?event=notready&path=$MTX_PATH&secret=__HOOK_SECRET__"

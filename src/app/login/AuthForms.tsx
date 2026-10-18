@@ -1,97 +1,183 @@
 "use client";
 
-import { useActionState, useState } from "react";
+import { useActionState, useState, useTransition } from "react";
 import Script from "next/script";
-import { createClient } from "@/lib/supabase/client";
 import { AtSign, Eye, EyeOff, Lock, Mail } from "lucide-react";
+import { Alert, Button } from "@/components/ui";
+import Tabs from "@/components/ui/Tabs";
 import { cn } from "@/lib/utils";
-import { signIn, signUp, type AuthState } from "./actions";
+import { signIn, signInWithProvider, signUp, type AuthState } from "./actions";
 
-function PasswordInput({ name, placeholder, autoComplete }: { name: string; placeholder: string; autoComplete: string }) {
+const TURNSTILE_SITE_KEY = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY;
+
+const inputCls =
+  "h-11 w-full rounded-lg border border-line bg-panel-2 pr-3 pl-10 text-sm placeholder:text-ink-dim focus:border-brand focus:bg-panel focus:outline-none focus:ring-4 focus:ring-brand/20";
+
+function IconInput({ icon: Icon, ...props }: React.ComponentProps<"input"> & { icon: typeof Mail }) {
+  return (
+    <div className="relative">
+      <Icon className="pointer-events-none absolute top-1/2 left-3.5 size-4 -translate-y-1/2 text-ink-dim" />
+      <input className={inputCls} {...props} />
+    </div>
+  );
+}
+
+function PasswordInput({ autoComplete, placeholder }: { autoComplete: string; placeholder: string }) {
   const [show, setShow] = useState(false);
   return (
-    <div className="input-icon">
-      <Lock size={16} />
+    <div className="relative">
+      <Lock className="pointer-events-none absolute top-1/2 left-3.5 size-4 -translate-y-1/2 text-ink-dim" />
       <input
-        className="input"
-        name={name}
+        className={cn(inputCls, "pr-11")}
+        name="password"
         type={show ? "text" : "password"}
         placeholder={placeholder}
         required
-        minLength={8}
+        minLength={autoComplete === "new-password" ? 8 : 1}
+        maxLength={128}
         autoComplete={autoComplete}
-        style={{ paddingRight: 44 }}
       />
       <button
         type="button"
-        className="btn btn-ghost btn-icon btn-sm input-action"
         onClick={() => setShow((s) => !s)}
-        aria-label={show ? "Masquer" : "Afficher"}
+        aria-label={show ? "Masquer le mot de passe" : "Afficher le mot de passe"}
+        className="absolute top-1/2 right-2 grid size-8 -translate-y-1/2 place-items-center rounded-md text-ink-dim hover:bg-panel-3 hover:text-ink"
       >
-        {show ? <EyeOff size={15} /> : <Eye size={15} />}
+        {show ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
       </button>
     </div>
   );
 }
 
-function Feedback({ state }: { state: AuthState }) {
-  if (!state) return null;
-  if (state.error) return <div className="alert alert-error">{state.error}</div>;
-  if (state.message) return <div className="alert alert-success">{state.message}</div>;
-  return null;
-}
-
-const TURNSTILE_SITE_KEY = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY;
-
-/** Captcha Cloudflare Turnstile (seulement si NEXT_PUBLIC_TURNSTILE_SITE_KEY est défini).
- *  Le widget ajoute un champ caché « cf-turnstile-response » au formulaire. */
-function Captcha() {
+/** Captcha Cloudflare Turnstile (si configuré). Le widget ajoute un champ caché au formulaire. */
+function Captcha({ nonce }: { nonce?: string }) {
   if (!TURNSTILE_SITE_KEY) return null;
   return (
     <>
-      <Script src="https://challenges.cloudflare.com/turnstile/v0/api.js" strategy="afterInteractive" />
-      <div className="cf-turnstile" data-sitekey={TURNSTILE_SITE_KEY} data-theme="auto" data-language="fr" />
+      <Script src="https://challenges.cloudflare.com/turnstile/v0/api.js" strategy="afterInteractive" nonce={nonce} />
+      <div className="cf-turnstile" data-sitekey={TURNSTILE_SITE_KEY} data-theme="dark" data-language="fr" />
     </>
   );
 }
 
+function Label({ children }: { children: React.ReactNode }) {
+  return <span className="text-[13px] font-semibold text-ink-muted">{children}</span>;
+}
+
+function Feedback({ state }: { state: AuthState }) {
+  if (state?.error) return <Alert tone="error">{state.error}</Alert>;
+  if (state?.message) return <Alert tone="success">{state.message}</Alert>;
+  return null;
+}
+
 function OAuthButtons() {
-  const [busy, setBusy] = useState<string | null>(null);
+  const [pending, start] = useTransition();
+  const [provider, setProvider] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  async function login(provider: "google" | "github") {
-    setBusy(provider);
+  function login(p: "google" | "github") {
+    setProvider(p);
     setError(null);
-    const { error } = await createClient().auth.signInWithOAuth({
-      provider,
-      options: { redirectTo: `${window.location.origin}/auth/callback` },
+    start(async () => {
+      const res = await signInWithProvider(p); // Redirige vers le fournisseur si tout va bien.
+      if (res?.error) setError(res.error);
     });
-    if (error) {
-      setBusy(null);
-      setError(
-        error.message.includes("not enabled")
-          ? `Connexion ${provider === "google" ? "Google" : "GitHub"} pas encore activée dans Supabase.`
-          : "Connexion impossible.",
-      );
-    }
   }
 
   return (
-    <div className="stack" style={{ gap: 10 }}>
-      <div className="row" style={{ flexWrap: "nowrap" }}>
-        <button type="button" className="btn oauth-btn" onClick={() => login("google")} disabled={!!busy}>
-          <GoogleIcon /> {busy === "google" ? "Redirection…" : "Google"}
-        </button>
-        <button type="button" className="btn oauth-btn" onClick={() => login("github")} disabled={!!busy}>
-          <GitHubIcon /> {busy === "github" ? "Redirection…" : "GitHub"}
-        </button>
+    <div className="flex flex-col gap-3">
+      <div className="grid grid-cols-2 gap-2">
+        <Button onClick={() => login("google")} loading={pending && provider === "google"} disabled={pending}>
+          {!(pending && provider === "google") && <GoogleIcon />} Google
+        </Button>
+        <Button onClick={() => login("github")} loading={pending && provider === "github"} disabled={pending}>
+          {!(pending && provider === "github") && <GitHubIcon />} GitHub
+        </Button>
       </div>
-      {error && <div className="alert alert-error">{error}</div>}
-      <div className="row muted tiny" style={{ gap: 10 }}>
-        <span className="grow" style={{ height: 1, background: "var(--border)" }} />
-        ou avec ton e-mail
-        <span className="grow" style={{ height: 1, background: "var(--border)" }} />
+      {error && <Alert tone="error">{error}</Alert>}
+      <div className="flex items-center gap-3 text-xs text-ink-dim">
+        <span className="h-px flex-1 bg-line" /> ou avec ton e-mail <span className="h-px flex-1 bg-line" />
       </div>
+    </div>
+  );
+}
+
+export default function AuthForms({ initialMode, message, nonce }: { initialMode: "login" | "signup"; message?: string; nonce?: string }) {
+  const [mode, setMode] = useState(initialMode);
+  const [loginState, loginAction, loginPending] = useActionState(signIn, null);
+  const [signupState, signupAction, signupPending] = useActionState(signUp, null);
+
+  return (
+    <div className="flex flex-col gap-5 p-5 sm:p-10">
+      <div>
+        <h2 className="text-2xl font-extrabold">{mode === "login" ? "Bon retour 👋" : "Créer un compte"}</h2>
+        <p className="mt-1 text-sm text-ink-muted">
+          {mode === "login" ? "Connecte-toi pour gérer tes caméras et discuter." : "Gratuit, en 30 secondes."}
+        </p>
+      </div>
+
+      <Tabs
+        value={mode}
+        onChange={setMode}
+        stretch
+        items={[
+          { value: "login", label: "Connexion" },
+          { value: "signup", label: "Inscription" },
+        ]}
+      />
+
+      {message && <Alert tone="info">{message}</Alert>}
+
+      <OAuthButtons />
+
+      {mode === "login" ? (
+        <form action={loginAction} className="flex flex-col gap-4">
+          <label className="flex flex-col gap-1.5">
+            <Label>E-mail</Label>
+            <IconInput icon={Mail} name="email" type="email" placeholder="toi@exemple.fr" required maxLength={254} autoComplete="email" />
+          </label>
+          <label className="flex flex-col gap-1.5">
+            <Label>Mot de passe</Label>
+            <PasswordInput autoComplete="current-password" placeholder="••••••••" />
+          </label>
+          <Captcha nonce={nonce} />
+          <Feedback state={loginState} />
+          <Button type="submit" variant="primary" size="lg" block loading={loginPending}>
+            Se connecter
+          </Button>
+        </form>
+      ) : (
+        <form action={signupAction} className="flex flex-col gap-4">
+          <label className="flex flex-col gap-1.5">
+            <Label>Pseudo</Label>
+            <IconInput
+              icon={AtSign}
+              name="username"
+              placeholder="ton_pseudo"
+              required
+              minLength={3}
+              maxLength={30}
+              pattern="[A-Za-z0-9_]+"
+              title="Lettres, chiffres ou _"
+              autoComplete="username"
+            />
+            <span className="text-xs text-ink-dim">3 à 30 caractères : lettres, chiffres ou _. Visible publiquement.</span>
+          </label>
+          <label className="flex flex-col gap-1.5">
+            <Label>E-mail</Label>
+            <IconInput icon={Mail} name="email" type="email" placeholder="toi@exemple.fr" required maxLength={254} autoComplete="email" />
+          </label>
+          <label className="flex flex-col gap-1.5">
+            <Label>Mot de passe</Label>
+            <PasswordInput autoComplete="new-password" placeholder="8 caractères minimum" />
+          </label>
+          <Captcha nonce={nonce} />
+          <Feedback state={signupState} />
+          <Button type="submit" variant="primary" size="lg" block loading={signupPending}>
+            Créer mon compte
+          </Button>
+        </form>
+      )}
     </div>
   );
 }
@@ -110,102 +196,3 @@ const GitHubIcon = () => (
     <path d="M12 .5C5.7.5.5 5.7.5 12c0 5.1 3.3 9.4 7.9 10.9.6.1.8-.3.8-.6v-2c-3.2.7-3.9-1.5-3.9-1.5-.5-1.3-1.3-1.7-1.3-1.7-1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.7-1.6-2.6-.3-5.3-1.3-5.3-5.7 0-1.3.5-2.3 1.2-3.1-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.3 1.2a11.5 11.5 0 0 1 6 0C17.3 4.7 18.3 5 18.3 5c.7 1.6.2 2.8.1 3.1.8.8 1.2 1.8 1.2 3.1 0 4.4-2.7 5.4-5.3 5.7.4.4.8 1.1.8 2.2v3.3c0 .3.2.7.8.6A11.5 11.5 0 0 0 23.5 12C23.5 5.7 18.3.5 12 .5z" />
   </svg>
 );
-
-export default function AuthForms({ initialMode, message }: { initialMode: "login" | "signup"; message?: string }) {
-  const [mode, setMode] = useState(initialMode);
-  const [loginState, loginAction, loginPending] = useActionState(signIn, null);
-  const [signupState, signupAction, signupPending] = useActionState(signUp, null);
-
-  return (
-    <div className="auth-form stack" style={{ gap: 20 }}>
-      <div>
-        <h2 style={{ fontSize: 26, fontWeight: 800 }}>{mode === "login" ? "Bon retour 👋" : "Créer un compte"}</h2>
-        <p className="muted" style={{ marginTop: 6 }}>
-          {mode === "login" ? "Connecte-toi pour gérer tes caméras et discuter." : "C'est gratuit et ça prend 30 secondes."}
-        </p>
-      </div>
-
-      <div className="tabs">
-        <button className={cn("tab grow", mode === "login" && "active")} style={{ justifyContent: "center" }} onClick={() => setMode("login")}>
-          Connexion
-        </button>
-        <button className={cn("tab grow", mode === "signup" && "active")} style={{ justifyContent: "center" }} onClick={() => setMode("signup")}>
-          Inscription
-        </button>
-      </div>
-
-      {message && <div className="alert alert-info">{message}</div>}
-
-      <OAuthButtons />
-
-      {mode === "login" ? (
-        <form action={loginAction} className="stack" style={{ gap: 14 }}>
-          <div className="field">
-            <label>E-mail</label>
-            <div className="input-icon">
-              <Mail size={16} />
-              <input className="input" name="email" type="email" placeholder="toi@exemple.fr" required autoComplete="email" />
-            </div>
-          </div>
-          <div className="field">
-            <label>Mot de passe</label>
-            <PasswordInput name="password" placeholder="••••••••" autoComplete="current-password" />
-          </div>
-          <Captcha />
-          <Feedback state={loginState} />
-          <button className="btn btn-primary btn-lg btn-block" disabled={loginPending}>
-            {loginPending ? "Connexion…" : "Se connecter"}
-          </button>
-          <p className="muted small" style={{ textAlign: "center" }}>
-            Pas encore de compte ?{" "}
-            <button type="button" className="btn-link" onClick={() => setMode("signup")}>
-              Inscris-toi
-            </button>
-          </p>
-        </form>
-      ) : (
-        <form action={signupAction} className="stack" style={{ gap: 14 }}>
-          <div className="field">
-            <label>Pseudo</label>
-            <div className="input-icon">
-              <AtSign size={16} />
-              <input
-                className="input"
-                name="username"
-                placeholder="ton_pseudo"
-                required
-                minLength={3}
-                maxLength={30}
-                pattern="[A-Za-z0-9_]+"
-                title="Lettres, chiffres ou _"
-              />
-            </div>
-            <span className="hint">3 à 30 caractères : lettres, chiffres ou _. Visible publiquement.</span>
-          </div>
-          <div className="field">
-            <label>E-mail</label>
-            <div className="input-icon">
-              <Mail size={16} />
-              <input className="input" name="email" type="email" placeholder="toi@exemple.fr" required autoComplete="email" />
-            </div>
-          </div>
-          <div className="field">
-            <label>Mot de passe</label>
-            <PasswordInput name="password" placeholder="8 caractères minimum" autoComplete="new-password" />
-          </div>
-          <Captcha />
-          <Feedback state={signupState} />
-          <button className="btn btn-gradient btn-lg btn-block" disabled={signupPending}>
-            {signupPending ? "Création…" : "Créer mon compte"}
-          </button>
-          <p className="muted small" style={{ textAlign: "center" }}>
-            Déjà inscrit ?{" "}
-            <button type="button" className="btn-link" onClick={() => setMode("login")}>
-              Connecte-toi
-            </button>
-          </p>
-        </form>
-      )}
-    </div>
-  );
-}

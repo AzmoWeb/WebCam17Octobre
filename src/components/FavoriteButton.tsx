@@ -1,10 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Heart } from "lucide-react";
-import { createClient } from "@/lib/supabase/client";
+import { Button } from "@/components/ui";
 import { useUI } from "./UIProvider";
+import { toggleFavorite } from "@/app/cam/[id]/actions";
 import { cn } from "@/lib/utils";
 
 type Props = {
@@ -16,56 +17,58 @@ type Props = {
   onChange?: (fav: boolean) => void;
 };
 
-export default function FavoriteButton({ streamId, initial, count = 0, loggedIn, variant = "button", onChange }: Props) {
+export default function FavoriteButton({ streamId, initial, count, loggedIn, variant = "button", onChange }: Props) {
   const router = useRouter();
   const { toast } = useUI();
   const [fav, setFav] = useState(initial);
-  const [total, setTotal] = useState(count);
-  const [busy, setBusy] = useState(false);
+  const [total, setTotal] = useState(count ?? 0);
+  const [pending, start] = useTransition();
 
-  async function toggle(e: React.MouseEvent) {
+  function toggle(e: React.MouseEvent) {
     e.preventDefault();
     e.stopPropagation();
     if (!loggedIn) {
       toast("Connecte-toi pour ajouter des favoris.", "info");
-      router.push("/login");
-      return;
+      return router.push("/login");
     }
-    setBusy(true);
-    const supabase = createClient();
     const next = !fav;
-    const { error } = next
-      ? await supabase.from("favorites").insert({ stream_id: streamId })
-      : await supabase.from("favorites").delete().eq("stream_id", streamId);
-    setBusy(false);
-    if (error) return toast("Impossible de modifier les favoris.", "error");
-    setFav(next);
+    setFav(next); // Affichage immédiat, annulé en cas d'erreur.
     setTotal((t) => t + (next ? 1 : -1));
-    onChange?.(next);
-    toast(next ? "Ajoutée à tes favoris" : "Retirée de tes favoris", next ? "success" : "info");
+    start(async () => {
+      const res = await toggleFavorite(streamId, next);
+      if (!res.ok) {
+        setFav(!next);
+        setTotal((t) => t + (next ? -1 : 1));
+        return toast(res.error, "error");
+      }
+      onChange?.(next);
+    });
   }
+
+  const label = fav ? "Retirer des favoris" : "Ajouter aux favoris";
 
   if (variant === "overlay") {
     return (
       <button
-        className={cn("fav-btn", fav && "on")}
         onClick={toggle}
-        disabled={busy}
-        aria-label={fav ? "Retirer des favoris" : "Ajouter aux favoris"}
-        title={fav ? "Retirer des favoris" : "Ajouter aux favoris"}
+        disabled={pending}
+        aria-label={label}
+        title={label}
+        className={cn(
+          "grid size-8 place-items-center rounded-full bg-black/55 backdrop-blur transition hover:scale-110",
+          fav ? "text-live" : "text-white",
+        )}
       >
-        <Heart size={16} />
+        <Heart className="size-4" fill={fav ? "currentColor" : "none"} />
       </button>
     );
   }
 
   return (
-    <button className={cn("btn", fav && "active")} onClick={toggle} disabled={busy}>
-      <Heart size={16} fill={fav ? "currentColor" : "none"} />
-      {fav ? "Favori" : "Ajouter aux favoris"}
-      <span className="badge" style={{ height: 20 }}>
-        {total}
-      </span>
-    </button>
+    <Button variant={fav ? "primary" : "secondary"} onClick={toggle} disabled={pending} aria-label={label}>
+      <Heart className="size-4" fill={fav ? "currentColor" : "none"} />
+      <span className="hidden sm:inline">{fav ? "Favori" : "Favoris"}</span>
+      {count !== undefined && <span className="tabular-nums opacity-80">{total}</span>}
+    </Button>
   );
 }

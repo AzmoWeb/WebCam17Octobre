@@ -1,21 +1,15 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import Link from "next/link";
-import { ArrowDown, Ban, Crown, Flag, MessageSquare, Send, ShieldAlert, Smile, Trash2, Users } from "lucide-react";
+import { ArrowDown, Ban, Crown, Flag, MessageSquare, Send, Smile, Trash2, Users } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { Modal, useUI } from "@/components/UIProvider";
-import Avatar from "@/components/Avatar";
+import { Alert, Button, buttonClass, Textarea } from "@/components/ui";
 import { cn, colorFor, formatTime } from "@/lib/utils";
+import { banFromChat, deleteComment, reportComment, sendComment, type ChatComment } from "./actions";
 
-export type Comment = {
-  id: number;
-  stream_id: string;
-  user_id: string;
-  username: string;
-  content: string;
-  created_at: string;
-};
+export type Comment = ChatComment;
 
 type Props = {
   streamId: string;
@@ -25,20 +19,20 @@ type Props = {
   isOwner: boolean;
   isBanned: boolean;
   viewers: number;
+  className?: string;
 };
 
 const MAX_MESSAGES = 300;
 const MAX_LENGTH = 500;
-const EMOJIS = ["😀", "😂", "😍", "🥳", "😮", "😢", "😡", "👍", "👏", "🙌", "✊", "💪", "🔥", "❤️", "💯", "🎉",
-  "👀", "📢", "📸", "🚨", "✌️", "🙏", "🤝", "🌍"];
+const EMOJIS = ["😀", "😂", "😍", "🥳", "😮", "😢", "😡", "👍", "👏", "🙌", "✊", "💪", "🔥", "❤️", "💯", "🎉", "👀", "📢", "📸", "🚨", "✌️", "🙏", "🤝", "🌍"];
 const REPORT_REASONS = ["Spam ou publicité", "Propos haineux", "Harcèlement", "Contenu choquant", "Autre"];
 
-export default function Chat({ streamId, ownerId, initialComments, currentUserId, isOwner, isBanned, viewers }: Props) {
+export default function Chat({ streamId, ownerId, initialComments, currentUserId, isOwner, isBanned, viewers, className }: Props) {
   const supabase = useMemo(() => createClient(), []);
   const { toast, confirm } = useUI();
   const [comments, setComments] = useState(initialComments);
   const [text, setText] = useState("");
-  const [sending, setSending] = useState(false);
+  const [sending, startSend] = useTransition();
   const [banned, setBanned] = useState(isBanned);
   const [showEmojis, setShowEmojis] = useState(false);
   const [atBottom, setAtBottom] = useState(true);
@@ -48,18 +42,15 @@ export default function Chat({ streamId, ownerId, initialComments, currentUserId
   const inputRef = useRef<HTMLInputElement>(null);
   const atBottomRef = useRef(true);
 
+  // Lecture en temps réel (données publiques, client anonyme).
   useEffect(() => {
     const channel = supabase
       .channel(`comments:${streamId}`)
-      .on(
-        "postgres_changes",
-        { event: "INSERT", schema: "public", table: "comments", filter: `stream_id=eq.${streamId}` },
-        (payload) => {
-          const c = payload.new as Comment;
-          setComments((prev) => (prev.some((p) => p.id === c.id) ? prev : [...prev, c].slice(-MAX_MESSAGES)));
-          if (!atBottomRef.current) setUnread((n) => n + 1);
-        },
-      )
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "comments", filter: `stream_id=eq.${streamId}` }, (payload) => {
+        const c = payload.new as Comment;
+        setComments((prev) => (prev.some((p) => p.id === c.id) ? prev : [...prev, c].slice(-MAX_MESSAGES)));
+        if (!atBottomRef.current) setUnread((n) => n + 1);
+      })
       // Les suppressions ne sont pas filtrables côté Supabase : on filtre localement par id.
       .on("postgres_changes", { event: "DELETE", schema: "public", table: "comments" }, (payload) => {
         const id = (payload.old as { id?: number }).id;
@@ -71,7 +62,6 @@ export default function Chat({ streamId, ownerId, initialComments, currentUserId
     };
   }, [supabase, streamId]);
 
-  // Défilement automatique, sauf si l'utilisateur remonte dans l'historique.
   useEffect(() => {
     const el = listRef.current;
     if (el && atBottomRef.current) el.scrollTop = el.scrollHeight;
@@ -87,262 +77,232 @@ export default function Chat({ streamId, ownerId, initialComments, currentUserId
   }
 
   function scrollToBottom() {
-    const el = listRef.current;
-    if (el) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+    listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" });
     setUnread(0);
   }
 
-  async function send(e: React.FormEvent) {
+  function send(e: React.FormEvent) {
     e.preventDefault();
     const content = text.trim();
     if (!content || sending) return;
-    setSending(true);
-    const { data, error } = await supabase
-      .from("comments")
-      .insert({ stream_id: streamId, content })
-      .select()
-      .single();
-    setSending(false);
-    if (error) {
-      // 42501 = refus RLS : l'utilisateur a été banni pendant la session.
-      if (error.code === "42501") setBanned(true);
-      else toast("Message non envoyé, réessaie.", "error");
-      return;
-    }
-    setText("");
-    setShowEmojis(false);
-    atBottomRef.current = true;
-    setComments((prev) => (prev.some((p) => p.id === data.id) ? prev : [...prev, data as Comment].slice(-MAX_MESSAGES)));
-    inputRef.current?.focus();
+    startSend(async () => {
+      const res = await sendComment(streamId, content);
+      if (!res.ok) {
+        if (res.error === "banned") setBanned(true);
+        else toast(res.error, "error");
+        return;
+      }
+      setText("");
+      setShowEmojis(false);
+      atBottomRef.current = true;
+      const c = res.data!;
+      setComments((prev) => (prev.some((p) => p.id === c.id) ? prev : [...prev, c].slice(-MAX_MESSAGES)));
+      inputRef.current?.focus();
+    });
   }
 
   async function remove(c: Comment) {
-    const ok = await confirm({ title: "Supprimer ce message ?", confirmLabel: "Supprimer", danger: true });
-    if (!ok) return;
-    const { error } = await supabase.from("comments").delete().eq("id", c.id);
-    if (error) return toast("Suppression impossible.", "error");
+    if (!(await confirm({ title: "Supprimer ce message ?", confirmLabel: "Supprimer", danger: true }))) return;
+    const res = await deleteComment(c.id);
+    if (!res.ok) return toast(res.error, "error");
     setComments((prev) => prev.filter((p) => p.id !== c.id));
-    toast("Message supprimé");
   }
 
   async function ban(c: Comment) {
     const ok = await confirm({
-      title: `Bannir @${c.username} ?`,
-      message: "Il ne pourra plus écrire dans ce chat et tous ses messages seront supprimés. Tu pourras le débannir depuis le Studio.",
+      title: `Bannir ${c.username} ?`,
+      message: "Il ne pourra plus écrire dans ce chat et ses messages seront supprimés. Tu pourras le débannir depuis le Studio.",
       confirmLabel: "Bannir",
       danger: true,
     });
     if (!ok) return;
-    const { error } = await supabase.from("stream_bans").upsert({ stream_id: streamId, user_id: c.user_id });
-    if (error) return toast("Bannissement impossible.", "error");
-    await supabase.from("comments").delete().eq("stream_id", streamId).eq("user_id", c.user_id);
+    const res = await banFromChat(streamId, c.user_id);
+    if (!res.ok) return toast(res.error, "error");
     setComments((prev) => prev.filter((p) => p.user_id !== c.user_id));
-    toast(`@${c.username} a été banni`);
+    toast(res.message ?? "Banni");
   }
-
-  function insertEmoji(emoji: string) {
-    setText((t) => (t + emoji).slice(0, MAX_LENGTH));
-    inputRef.current?.focus();
-  }
-
-  const remaining = MAX_LENGTH - text.length;
 
   return (
-    <aside className="card chat">
-      <div className="chat-header">
-        <h3>
-          <MessageSquare size={17} /> Chat en direct
-        </h3>
-        <span className="stat-pill" title="Spectateurs connectés">
-          <Users size={14} /> {viewers}
+    <aside className={cn("flex min-h-0 flex-col overflow-hidden border-line bg-panel lg:rounded-xl lg:border", className)}>
+      <div className="flex items-center justify-between border-b border-line px-4 py-3">
+        <h2 className="flex items-center gap-2 text-sm font-bold tracking-wide uppercase">
+          <MessageSquare className="size-4 text-brand" /> Chat en direct
+        </h2>
+        <span className="inline-flex items-center gap-1.5 text-[13px] text-ink-muted" title="Spectateurs connectés">
+          <Users className="size-3.5" /> {viewers}
         </span>
       </div>
 
-      <div className="chat-messages" ref={listRef} onScroll={onScroll}>
-        {comments.length === 0 && (
-          <div className="empty" style={{ border: 0, padding: "48px 12px" }}>
-            <div className="empty-icon">
-              <MessageSquare size={26} />
-            </div>
-            <h3>Bienvenue dans le chat !</h3>
-            <p className="small">Sois le premier à écrire un message.</p>
-          </div>
-        )}
-
-        {comments.map((c) => {
-          const mine = c.user_id === currentUserId;
-          const isStreamer = c.user_id === ownerId;
-          return (
-            <div key={c.id} className={cn("chat-message", mine && "mine")}>
-              <Avatar name={c.username} size={26} />
-              <div className="body">
-                {isStreamer && (
-                  <span className="role-badge">
-                    <Crown size={10} /> Streamer
-                  </span>
-                )}
-                <Link href={`/u/${c.username}`} className="author" style={{ color: colorFor(c.username) }}>
-                  {c.username}
-                </Link>
-                <span>{c.content}</span>
-                <span className="time">{formatTime(c.created_at)}</span>
+      <div className="relative min-h-0 flex-1">
+        <div ref={listRef} onScroll={onScroll} className="absolute inset-0 overflow-y-auto px-2 py-2">
+          {comments.length === 0 && (
+            <div className="flex h-full flex-col items-center justify-center gap-2 px-4 text-center">
+              <div className="grid size-12 place-items-center rounded-xl bg-panel-2 text-brand">
+                <MessageSquare className="size-5" />
               </div>
-
-              {currentUserId && (
-                <div className="msg-actions">
-                  {!mine && (
-                    <button className="msg-action" title="Signaler" onClick={() => setReporting(c)}>
-                      <Flag size={14} />
-                    </button>
-                  )}
-                  {(mine || isOwner) && (
-                    <button className="msg-action danger" title="Supprimer" onClick={() => remove(c)}>
-                      <Trash2 size={14} />
-                    </button>
-                  )}
-                  {isOwner && !mine && (
-                    <button className="msg-action danger" title="Bannir" onClick={() => ban(c)}>
-                      <Ban size={14} />
-                    </button>
-                  )}
-                </div>
-              )}
+              <p className="font-semibold">Bienvenue dans le chat !</p>
+              <p className="text-sm text-ink-dim">Sois le premier à écrire un message.</p>
             </div>
-          );
-        })}
+          )}
+          {comments.map((c) => {
+            const mine = c.user_id === currentUserId;
+            return (
+              <div key={c.id} className={cn("group/msg relative flex gap-2 rounded-md px-2 py-1.5 text-sm leading-relaxed hover:bg-panel-2", mine && "bg-brand/10")}>
+                <div className="min-w-0 flex-1 break-words">
+                  <span className="mr-1.5 text-[11px] text-ink-dim tabular-nums">{formatTime(c.created_at)}</span>
+                  {c.user_id === ownerId && (
+                    <span className="mr-1 inline-flex h-4 items-center gap-0.5 rounded bg-brand px-1 align-[1px] text-[10px] font-extrabold text-white uppercase">
+                      <Crown className="size-2.5" /> Streamer
+                    </span>
+                  )}
+                  <Link href={`/u/${c.username}`} className="font-bold hover:underline" style={{ color: colorFor(c.username) }}>
+                    {c.username}
+                  </Link>
+                  <span className="text-ink-dim">: </span>
+                  <span className="text-ink">{c.content}</span>
+                </div>
+                {currentUserId && (
+                  <div className="absolute -top-3 right-2 hidden gap-0.5 rounded-md border border-line bg-panel-2 p-0.5 shadow-lg group-hover/msg:flex">
+                    {!mine && (
+                      <button className="grid size-7 place-items-center rounded text-ink-muted hover:bg-panel-3 hover:text-ink" title="Signaler" onClick={() => setReporting(c)}>
+                        <Flag className="size-3.5" />
+                      </button>
+                    )}
+                    {(mine || isOwner) && (
+                      <button className="grid size-7 place-items-center rounded text-ink-muted hover:bg-danger/15 hover:text-danger" title="Supprimer" onClick={() => remove(c)}>
+                        <Trash2 className="size-3.5" />
+                      </button>
+                    )}
+                    {isOwner && !mine && (
+                      <button className="grid size-7 place-items-center rounded text-ink-muted hover:bg-danger/15 hover:text-danger" title="Bannir" onClick={() => ban(c)}>
+                        <Ban className="size-3.5" />
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+        {!atBottom && (
+          <Button variant="primary" size="sm" className="absolute bottom-3 left-1/2 z-10 -translate-x-1/2 shadow-xl" onClick={scrollToBottom}>
+            <ArrowDown className="size-3.5" />
+            {unread > 0 ? `${unread} nouveau${unread > 1 ? "x" : ""} message${unread > 1 ? "s" : ""}` : "Revenir en bas"}
+          </Button>
+        )}
       </div>
 
-      {!atBottom && (
-        <div style={{ position: "relative" }}>
-          <button className="btn btn-primary btn-sm new-messages" onClick={scrollToBottom}>
-            <ArrowDown size={14} /> {unread > 0 ? `${unread} nouveau${unread > 1 ? "x" : ""} message${unread > 1 ? "s" : ""}` : "Revenir en bas"}
-          </button>
-        </div>
-      )}
-
-      <div className="chat-footer">
+      <div className="border-t border-line p-3">
         {!currentUserId ? (
-          <div className="stack" style={{ alignItems: "center", textAlign: "center", padding: 6 }}>
-            <span className="muted small">Connecte-toi pour participer au chat.</span>
-            <div className="row">
-              <Link href="/login" className="btn btn-sm">
+          <div className="flex flex-col items-center gap-2 py-1 text-center">
+            <span className="text-sm text-ink-muted">Connecte-toi pour participer au chat.</span>
+            <div className="flex gap-2">
+              <Link href="/login" className={buttonClass({ size: "sm" })}>
                 Connexion
               </Link>
-              <Link href="/login?mode=signup" className="btn btn-primary btn-sm">
+              <Link href="/login?mode=signup" className={buttonClass({ variant: "primary", size: "sm" })}>
                 Créer un compte
               </Link>
             </div>
           </div>
         ) : banned ? (
-          <div className="alert alert-error">
-            <ShieldAlert size={18} /> Tu as été banni de ce chat par le streamer.
-          </div>
+          <Alert tone="error">Tu ne peux plus écrire dans ce chat.</Alert>
         ) : (
-          <>
-            <form className="chat-input" onSubmit={send}>
+          <form onSubmit={send} className="relative flex gap-2">
+            <div className="relative flex-1">
               <input
                 ref={inputRef}
-                className="input"
                 value={text}
                 onChange={(e) => setText(e.target.value.slice(0, MAX_LENGTH))}
-                placeholder="Envoyer un message…"
+                placeholder="Envoyer un message"
                 maxLength={MAX_LENGTH}
+                aria-label="Message"
+                className="h-10 w-full rounded-lg border border-line bg-panel-2 pr-10 pl-3 text-sm placeholder:text-ink-dim focus:border-brand focus:outline-none"
               />
               <button
                 type="button"
-                className="btn btn-ghost btn-icon btn-sm emoji-toggle"
                 onClick={() => setShowEmojis((s) => !s)}
+                className="absolute top-1/2 right-1.5 grid size-7 -translate-y-1/2 place-items-center rounded text-ink-muted hover:bg-panel-3 hover:text-ink"
                 aria-label="Émojis"
               >
-                <Smile size={18} />
+                <Smile className="size-4" />
               </button>
-              <button className="btn btn-primary btn-icon" disabled={sending || !text.trim()} aria-label="Envoyer">
-                <Send size={17} />
-              </button>
-              {showEmojis && (
-                <div className="emoji-picker">
-                  {EMOJIS.map((e) => (
-                    <button type="button" key={e} onClick={() => insertEmoji(e)}>
-                      {e}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </form>
-            {text.length > 0 && (
-              <div className={cn("char-count", remaining < 50 && "warn")}>{remaining} caractères restants</div>
+            </div>
+            <Button type="submit" variant="primary" icon disabled={!text.trim()} loading={sending} aria-label="Envoyer">
+              {!sending && <Send className="size-4" />}
+            </Button>
+            {showEmojis && (
+              <div className="absolute right-0 bottom-full z-20 mb-2 grid animate-pop grid-cols-8 gap-0.5 rounded-xl border border-line bg-panel-2 p-2 shadow-2xl">
+                {EMOJIS.map((e) => (
+                  <button
+                    type="button"
+                    key={e}
+                    className="grid size-8 place-items-center rounded-md text-lg hover:bg-panel-3"
+                    onClick={() => {
+                      setText((t) => (t + e).slice(0, MAX_LENGTH));
+                      inputRef.current?.focus();
+                    }}
+                  >
+                    {e}
+                  </button>
+                ))}
+              </div>
             )}
-          </>
+          </form>
+        )}
+        {text.length > MAX_LENGTH - 100 && (
+          <div className={cn("mt-1 text-right text-[11px]", text.length > MAX_LENGTH - 30 ? "text-warning" : "text-ink-dim")}>
+            {MAX_LENGTH - text.length} caractères restants
+          </div>
         )}
       </div>
 
-      {reporting && (
-        <ReportDialog
-          comment={reporting}
-          onClose={() => setReporting(null)}
-          onSubmit={async (reason) => {
-            const { error } = await supabase.from("reports").insert({ comment_id: reporting.id, reason });
-            setReporting(null);
-            toast(
-              error ? "Message déjà signalé." : "Merci ! Le streamer a été prévenu.",
-              error ? "error" : "success",
-            );
-          }}
-        />
-      )}
+      {reporting && <ReportDialog comment={reporting} onClose={() => setReporting(null)} />}
     </aside>
   );
 }
 
-function ReportDialog({
-  comment,
-  onClose,
-  onSubmit,
-}: {
-  comment: Comment;
-  onClose: () => void;
-  onSubmit: (reason: string) => Promise<void>;
-}) {
+function ReportDialog({ comment, onClose }: { comment: Comment; onClose: () => void }) {
+  const { toast } = useUI();
   const [reason, setReason] = useState(REPORT_REASONS[0]);
   const [details, setDetails] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [pending, start] = useTransition();
+
+  function submit() {
+    start(async () => {
+      const res = await reportComment(comment.id, details ? `${reason} — ${details}` : reason);
+      onClose();
+      toast(res.ok ? res.message ?? "Signalé" : res.error, res.ok ? "success" : "error");
+    });
+  }
 
   return (
     <Modal title="Signaler un message" onClose={onClose}>
-      <div className="modal-body stack">
-        <div className="quote">
-          <strong>@{comment.username} :</strong> {comment.content}
+      <div className="flex flex-col gap-4 p-5">
+        <div className="rounded-r-lg border-l-4 border-line-strong bg-panel-2 px-3 py-2 text-sm break-words">
+          <strong>{comment.username} :</strong> {comment.content}
         </div>
-        <div className="radio-list">
+        <div className="flex flex-col gap-2">
           {REPORT_REASONS.map((r) => (
-            <label key={r} className={cn("radio-option", reason === r && "selected")}>
-              <input type="radio" name="reason" checked={reason === r} onChange={() => setReason(r)} />
+            <label
+              key={r}
+              className={cn(
+                "flex cursor-pointer items-center gap-3 rounded-lg border px-3.5 py-3 text-sm transition-colors",
+                reason === r ? "border-brand bg-brand/10" : "border-line hover:border-line-strong",
+              )}
+            >
+              <input type="radio" name="reason" checked={reason === r} onChange={() => setReason(r)} className="accent-brand" />
               {r}
             </label>
           ))}
         </div>
-        <textarea
-          className="textarea"
-          placeholder="Précisions (facultatif)"
-          maxLength={150}
-          value={details}
-          onChange={(e) => setDetails(e.target.value)}
-        />
+        <Textarea placeholder="Précisions (facultatif)" maxLength={150} value={details} onChange={(e) => setDetails(e.target.value)} />
       </div>
-      <div className="modal-footer">
-        <button className="btn" onClick={onClose}>
-          Annuler
-        </button>
-        <button
-          className="btn btn-danger"
-          disabled={busy}
-          onClick={async () => {
-            setBusy(true);
-            await onSubmit((details ? `${reason} — ${details}` : reason).slice(0, 200));
-          }}
-        >
-          <Flag size={15} /> Signaler
-        </button>
+      <div className="flex justify-end gap-2 px-5 pb-5">
+        <Button onClick={onClose}>Annuler</Button>
+        <Button variant="danger" onClick={submit} loading={pending}>
+          <Flag className="size-4" /> Signaler
+        </Button>
       </div>
     </Modal>
   );

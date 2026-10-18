@@ -1,57 +1,45 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { UserCheck, UserPlus } from "lucide-react";
-import { createClient } from "@/lib/supabase/client";
+import { Button } from "@/components/ui";
 import { useUI } from "./UIProvider";
-import { cn } from "@/lib/utils";
+import { toggleFollow } from "@/app/cam/[id]/actions";
 
-type Props = {
-  userId: string;
-  username: string;
-  initial: boolean;
-  followers?: number;
-  loggedIn: boolean;
-  small?: boolean;
-};
+type Props = { userId: string; username: string; initial: boolean; followers?: number; loggedIn: boolean; size?: "sm" | "md" };
 
-/** S'abonner / se désabonner d'un streamer. */
-export default function FollowButton({ userId, username, initial, followers, loggedIn, small }: Props) {
+export default function FollowButton({ userId, username, initial, followers, loggedIn, size = "md" }: Props) {
   const router = useRouter();
   const { toast } = useUI();
   const [following, setFollowing] = useState(initial);
   const [count, setCount] = useState(followers ?? 0);
-  const [busy, setBusy] = useState(false);
+  const [pending, start] = useTransition();
 
-  async function toggle() {
+  function toggle() {
     if (!loggedIn) {
       toast("Connecte-toi pour t'abonner.", "info");
-      router.push("/login");
-      return;
+      return router.push("/login");
     }
-    setBusy(true);
-    const supabase = createClient();
     const next = !following;
-    const { error } = next
-      ? await supabase.from("follows").insert({ followed_id: userId })
-      : await supabase.from("follows").delete().eq("followed_id", userId);
-    setBusy(false);
-    if (error) return toast("Action impossible.", "error");
     setFollowing(next);
     setCount((c) => c + (next ? 1 : -1));
-    toast(next ? `Tu suis maintenant @${username}` : `Tu ne suis plus @${username}`, next ? "success" : "info");
+    start(async () => {
+      const res = await toggleFollow(userId, next);
+      if (!res.ok) {
+        setFollowing(!next);
+        setCount((c) => c + (next ? -1 : 1));
+        return toast(res.error, "error");
+      }
+      toast(next ? `Tu suis @${username}` : `Tu ne suis plus @${username}`, next ? "success" : "info");
+    });
   }
 
   return (
-    <button className={cn("btn", small && "btn-sm", following ? "active" : "btn-primary")} onClick={toggle} disabled={busy}>
-      {following ? <UserCheck size={small ? 14 : 16} /> : <UserPlus size={small ? 14 : 16} />}
+    <Button variant={following ? "secondary" : "primary"} size={size} onClick={toggle} disabled={pending}>
+      {following ? <UserCheck className="size-4" /> : <UserPlus className="size-4" />}
       {following ? "Abonné" : "S'abonner"}
-      {followers !== undefined && (
-        <span className="badge" style={{ height: 20 }}>
-          {count}
-        </span>
-      )}
-    </button>
+      {followers !== undefined && <span className="tabular-nums opacity-80">{count}</span>}
+    </Button>
   );
 }
