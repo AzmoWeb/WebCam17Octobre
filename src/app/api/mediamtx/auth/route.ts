@@ -20,14 +20,25 @@ export async function POST(request: Request) {
   if (!body) return deny();
 
   if (body.action === "publish") {
-    const match = /^live\/([A-Za-z0-9]{16,128})$/.exec(body.path);
+    const match = /^live\/([A-Za-z0-9]{16,128})(_(?:720|480))?$/.exec(body.path);
     if (!match) return deny();
-    const { data } = await admin.from("stream_keys").select("stream_id").eq("key", match[1]).maybeSingle();
-    return data ? allow() : deny();
+    // Les qualités réduites sont publiées par ffmpeg sur la machine elle-même.
+    if (match[2] && !isLoopback(body.ip)) return deny();
+
+    let { data, error } = await admin
+      .from("stream_keys")
+      .select("stream_id, streams(owner:profiles!owner_id(is_banned))")
+      .eq("key", match[1])
+      .maybeSingle();
+    // Migration 003 pas encore appliquée (pas de colonne is_banned) : simple vérification de la clé.
+    if (error) ({ data } = await admin.from("stream_keys").select("stream_id").eq("key", match[1]).maybeSingle());
+    if (!data) return deny();
+    const owner = (data.streams as unknown as { owner: { is_banned: boolean } | null } | null)?.owner;
+    return owner?.is_banned ? deny() : allow();
   }
 
-  // La lecture directe est réservée au proxy HLS local : le public passe par /api/hls.
-  if (body.action === "read") return isLoopback(body.ip) ? allow() : deny();
+  // Lecture directe et enregistrements réservés au site (proxy local) : le public passe par /api/...
+  if (body.action === "read" || body.action === "playback") return isLoopback(body.ip) ? allow() : deny();
 
   return deny();
 }

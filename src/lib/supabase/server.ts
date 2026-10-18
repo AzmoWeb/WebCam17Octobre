@@ -24,12 +24,43 @@ export async function createClient() {
   );
 }
 
-export async function getCurrentUser() {
+export type CurrentUser = {
+  id: string;
+  email?: string;
+  username: string;
+  isAdmin: boolean;
+  isBanned: boolean;
+  unreadMessages: number;
+};
+
+export async function getCurrentUser(): Promise<CurrentUser | null> {
   const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return null;
-  const { data: profile } = await supabase.from("profiles").select("username").eq("id", user.id).single();
-  return { id: user.id, email: user.email, username: (profile?.username as string) ?? "" };
+
+  const [{ data: profile }, { count }] = await Promise.all([
+    supabase.from("profiles").select("*").eq("id", user.id).single(),
+    supabase
+      .from("messages")
+      .select("id", { count: "exact", head: true })
+      .eq("recipient_id", user.id)
+      .is("read_at", null),
+  ]);
+
+  return {
+    id: user.id,
+    email: user.email,
+    username: (profile?.username as string) ?? "",
+    isAdmin: !!profile?.is_admin,
+    isBanned: !!profile?.is_banned,
+    unreadMessages: count ?? 0,
+  };
+}
+
+/** Exige un administrateur (vérifié en base), sinon null. */
+export async function requireAdmin() {
+  const user = await getCurrentUser();
+  return user?.isAdmin ? user : null;
 }

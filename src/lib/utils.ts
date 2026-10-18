@@ -54,7 +54,31 @@ export const formatTime = (date: string) =>
 export const formatDate = (date: string) =>
   new Date(date).toLocaleDateString("fr-FR", { day: "numeric", month: "long", year: "numeric" });
 
-export const plural = (n: number, one: string, many: string) => `${n} ${n > 1 ? many : one}`;
+export const formatDateTime = (date: string) =>
+  new Date(date).toLocaleString("fr-FR", { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+
+/** 3725 -> "1 h 02 min", 95 -> "1 min 35 s". */
+export function formatDuration(seconds: number) {
+  const s = Math.max(0, Math.round(seconds));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  if (h) return `${h} h ${String(m).padStart(2, "0")} min`;
+  if (m) return `${m} min ${String(s % 60).padStart(2, "0")} s`;
+  return `${s} s`;
+}
+
+/** Durée en secondes entre deux dates (fin = maintenant si absente). */
+export const secondsBetween = (start: string, end?: string | null) =>
+  ((end ? new Date(end) : new Date()).getTime() - new Date(start).getTime()) / 1000;
+
+/** Message lisible pour les erreurs levées par les triggers anti-spam. */
+export function friendlyDbError(message?: string) {
+  if (!message) return "Action impossible, réessaie.";
+  const m = /(?:rate_limit|duplicate): (.*)/.exec(message);
+  return m ? m[1] : "Action impossible, réessaie.";
+}
+
+export const plural =(n: number, one: string, many: string) => `${n} ${n > 1 ? many : one}`;
 
 /** Résultat standard des server actions. */
 export type ActionResult<T = undefined> = { ok: true; data?: T; message?: string } | { ok: false; error: string };

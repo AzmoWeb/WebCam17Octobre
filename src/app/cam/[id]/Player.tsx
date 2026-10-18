@@ -4,7 +4,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Hls from "hls.js";
 import {
   Camera,
+  Check,
+  Gauge,
   Maximize,
+  Scissors,
   Minimize,
   Pause,
   PictureInPicture2,
@@ -15,7 +18,8 @@ import {
   WifiOff,
 } from "lucide-react";
 import { useUI } from "@/components/UIProvider";
-import { cn } from "@/lib/utils";
+import Countdown from "@/components/Countdown";
+import { cn, formatDateTime } from "@/lib/utils";
 
 export type Reaction = { id: number; emoji: string; left: number; drift: number };
 
@@ -27,12 +31,32 @@ type Props = {
   theater: boolean;
   onToggleTheater: () => void;
   reactions: Reaction[];
+  scheduledAt?: string | null;
+  onClip?: () => void;
 };
 
+const QUALITY_OPTIONS = [
+  { value: "", label: "Source" },
+  { value: "720", label: "720p" },
+  { value: "480", label: "480p (économie de données)" },
+];
+
 // Attend que la caméra soit en direct (polling du statut), puis lit le flux HLS
-// avec des contrôles maison : direct, volume, capture, PiP, mode cinéma, plein écran.
-export default function Player({ streamId, title, initiallyLive, onLiveChange, theater, onToggleTheater, reactions }: Props) {
+// avec des contrôles maison : direct, volume, qualité, clip, capture, PiP, mode cinéma, plein écran.
+export default function Player({
+  streamId,
+  title,
+  initiallyLive,
+  onLiveChange,
+  theater,
+  onToggleTheater,
+  reactions,
+  scheduledAt,
+  onClip,
+}: Props) {
   const { toast } = useUI();
+  const [quality, setQuality] = useState("");
+  const [qualityMenu, setQualityMenu] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<Hls | null>(null);
@@ -71,10 +95,10 @@ export default function Player({ streamId, title, initiallyLive, onLiveChange, t
   useEffect(() => {
     const video = videoRef.current;
     if (!live || !video) return;
-    const src = `/api/hls/${streamId}/index.m3u8`;
+    const src = `/api/hls/${streamId}/${quality ? `q${quality}/` : ""}index.m3u8`;
 
     if (Hls.isSupported()) {
-      const hls = new Hls({ lowLatencyMode: true, liveSyncDurationCount: 2 });
+      const hls = new Hls({ lowLatencyMode: true, liveSyncDurationCount: 2, manifestLoadingTimeOut: 20000 });
       hlsRef.current = hls;
       hls.loadSource(src);
       hls.attachMedia(video);
@@ -82,7 +106,11 @@ export default function Player({ streamId, title, initiallyLive, onLiveChange, t
       hls.on(Hls.Events.ERROR, (_e, data) => {
         if (!data.fatal) return;
         if (data.type === Hls.ErrorTypes.MEDIA_ERROR) hls.recoverMediaError();
-        else setLive(false);
+        else if (quality) {
+          // Qualité réduite indisponible (ffmpeg absent sur le serveur ?) : retour à la source.
+          toast("Cette qualité n'est pas disponible pour le moment.", "error");
+          setQuality("");
+        } else setLive(false);
       });
       return () => {
         hls.destroy();
@@ -101,7 +129,7 @@ export default function Player({ streamId, title, initiallyLive, onLiveChange, t
         video.load();
       };
     }
-  }, [live, streamId, setLive]);
+  }, [live, streamId, setLive, quality, toast]);
 
   // Latence par rapport au direct.
   useEffect(() => {
@@ -252,6 +280,33 @@ export default function Player({ streamId, title, initiallyLive, onLiveChange, t
             </button>
             {latency !== null && <span className="pc-info">Délai {latency.toFixed(1)} s</span>}
             <span className="grow" />
+            {onClip && (
+              <button className="pc-btn" onClick={onClip} title="Créer un clip des dernières secondes">
+                <Scissors size={19} />
+              </button>
+            )}
+            <div style={{ position: "relative" }}>
+              <button className="pc-btn" onClick={() => setQualityMenu((o) => !o)} title="Qualité">
+                <Gauge size={19} />
+              </button>
+              {qualityMenu && (
+                <div className="dropdown-menu" style={{ bottom: "calc(100% + 8px)", top: "auto", minWidth: 220 }}>
+                  {QUALITY_OPTIONS.map((q) => (
+                    <button
+                      key={q.value}
+                      className="dropdown-item"
+                      onClick={() => {
+                        setQuality(q.value);
+                        setQualityMenu(false);
+                      }}
+                    >
+                      <span style={{ width: 16 }}>{quality === q.value && <Check size={15} />}</span>
+                      {q.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
             <button className="pc-btn" onClick={screenshot} title="Capture d'écran">
               <Camera size={19} />
             </button>
@@ -271,7 +326,14 @@ export default function Player({ streamId, title, initiallyLive, onLiveChange, t
           <div className="offline-icon">
             <WifiOff size={30} />
           </div>
-          <strong style={{ fontSize: 18, color: "#fff" }}>Caméra hors ligne</strong>
+          {scheduledAt && new Date(scheduledAt).getTime() > Date.now() ? (
+            <>
+              <strong style={{ fontSize: 18, color: "#fff" }}>Direct prévu {formatDateTime(scheduledAt)}</strong>
+              <Countdown to={scheduledAt} />
+            </>
+          ) : (
+            <strong style={{ fontSize: 18, color: "#fff" }}>Caméra hors ligne</strong>
+          )}
           <span className="row small" style={{ justifyContent: "center" }}>
             <span className="spinner" /> En attente du direct — la vidéo démarrera automatiquement
           </span>

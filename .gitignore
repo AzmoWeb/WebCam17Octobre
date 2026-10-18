@@ -9,3 +9,7 @@ mediamtx/mediamtx.exe
 mediamtx/mediamtx
 *.rar
 *.zip
+env.local
+*.local
+WebCam17Octobre/
+recordings/
