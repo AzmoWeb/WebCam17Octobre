@@ -1,0 +1,44 @@
+# Configuration MediaMTX pour CamManif.
+# Ne contient que les réglages modifiés ; le reste garde les valeurs par défaut.
+#
+# Fonctionnement :
+#  - les caméras / OBS publient en RTMP (ou RTSP) sur live/<CLE_SECRETE> ;
+#  - MediaMTX demande au site (authHTTPAddress) si la clé est valide ;
+#  - le HLS et l'API n'écoutent que sur 127.0.0.1 : les spectateurs passent par
+#    le proxy Next.js /api/hls/<id>/..., qui ne révèle jamais la clé.
+
+logLevel: info
+
+# --- Authentification déléguée au site Next.js ---
+authMethod: http
+authHTTPAddress: http://127.0.0.1:3000/api/mediamtx/auth
+authHTTPExclude:
+  - action: api
+  - action: metrics
+  - action: pprof
+
+# --- API (statut "en direct"), accessible uniquement en local ---
+api: yes
+apiAddress: 127.0.0.1:9997
+
+# --- Ingestion ---
+rtmp: yes
+rtmpAddress: :1935
+rtsp: yes
+rtspAddress: :8554
+
+# --- Lecture HLS, uniquement en local (proxy Next.js) ---
+hls: yes
+hlsAddress: 127.0.0.1:8888
+hlsVariant: lowLatency
+hlsSegmentCount: 7
+hlsSegmentDuration: 1s
+hlsPartDuration: 200ms
+
+# --- Désactivés (non utilisés) ---
+webrtc: no
+srt: no
+playback: no
+
+paths:
+  all_others:
