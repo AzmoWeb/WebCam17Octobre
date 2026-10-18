@@ -72,5 +72,5 @@ paths:
 
   # Toutes les caméras : prévenir le site au début et à la fin du direct.
   all_others:
-    runOnReady: curl -s -X POST "http://127.0.0.1:3000/api/mediamtx/hook?event=ready&path=$MTX_PATH&secret=__HOOK_SECRET__"
-    runOnNotReady: curl -s -X POST "http://127.0.0.1:3000/api/mediamtx/hook?event=notready&path=$MTX_PATH&secret=__HOOK_SECRET__"
+    runOnAvailable: curl -s -X POST "http://127.0.0.1:3000/api/mediamtx/hook?event=ready&path=$MTX_PATH&secret=__HOOK_SECRET__"
+    runOnUnavailable: curl -s -X POST "http://127.0.0.1:3000/api/mediamtx/hook?event=notready&path=$MTX_PATH&secret=__HOOK_SECRET__"
