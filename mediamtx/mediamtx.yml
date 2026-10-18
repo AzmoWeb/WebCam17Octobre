@@ -1,0 +1,76 @@
+# Modèle de configuration MediaMTX pour CamManif.
+# Ne pas modifier mediamtx.yml à la main : il est généré à partir de ce fichier par
+#   npm run mediamtx:config
+# qui y injecte MEDIAMTX_HOOK_SECRET (.env.local). mediamtx.yml n'est pas versionné.
+#
+# Fonctionnement :
+#  - les caméras / OBS publient sur live/<ID_CAMERA>?key=<CLE> (RTMP ou RTSP) ;
+#  - MediaMTX demande au site si la clé est valide (comparaison de hash) ;
+#  - HLS, API et lecture des enregistrements n'écoutent que sur 127.0.0.1 :
+#    les spectateurs passent par le site ;
+#  - chaque direct est enregistré (replays + clips) et signalé au site (hooks).
+
+logLevel: info
+
+# --- Authentification déléguée au site Next.js (secret partagé) ---
+authMethod: http
+authHTTPAddress: http://127.0.0.1:3000/api/mediamtx/auth?secret=change-me-hook-secret
+authHTTPExclude:
+  - action: api
+  - action: metrics
+  - action: pprof
+
+# --- API (statut "en direct", coupure), uniquement en local ---
+api: yes
+apiAddress: 127.0.0.1:9997
+
+# --- Ingestion ---
+rtmp: yes
+rtmpAddress: :1935
+rtsp: yes
+rtspAddress: :8554
+
+# --- Lecture HLS, uniquement en local (proxy Next.js) ---
+hls: yes
+hlsAddress: 127.0.0.1:8888
+hlsVariant: lowLatency
+hlsSegmentCount: 7
+hlsSegmentDuration: 1s
+hlsPartDuration: 200ms
+
+# --- Lecture des enregistrements (replays / clips), uniquement en local ---
+playback: yes
+playbackAddress: 127.0.0.1:9996
+
+# --- Désactivés (non utilisés) ---
+webrtc: no
+srt: no
+
+pathDefaults:
+  # Enregistrement de chaque direct, supprimé automatiquement après 7 jours.
+  record: yes
+  recordPath: ./recordings/%path/%Y-%m-%d_%H-%M-%S-%f
+  recordFormat: fmp4
+  recordPartDuration: 1s
+  recordSegmentDuration: 10m
+  recordDeleteAfter: 7d
+
+paths:
+  # Qualités réduites, générées à la demande par ffmpeg (seulement si un
+  # spectateur les choisit). Nécessite ffmpeg dans le PATH.
+  "~^live/([0-9a-f-]{36})_(720|480)$":
+    record: no
+    runOnDemand: >-
+      ffmpeg -hide_banner -loglevel error -rtsp_transport tcp
+      -i rtsp://127.0.0.1:8554/live/$G1
+      -vf scale=-2:$G2 -c:v libx264 -preset veryfast -tune zerolatency -g 30
+      -b:v 2500k -maxrate 2500k -bufsize 5000k
+      -c:a aac -b:a 96k
+      -f rtsp rtsp://127.0.0.1:8554/$MTX_PATH
+    runOnDemandRestart: yes
+    runOnDemandCloseAfter: 15s
+
+  # Toutes les caméras : prévenir le site au début et à la fin du direct.
+  all_others:
+    runOnReady: curl -s -X POST "http://127.0.0.1:3000/api/mediamtx/hook?event=ready&path=$MTX_PATH&secret=change-me-hook-secret"
+    runOnNotReady: curl -s -X POST "http://127.0.0.1:3000/api/mediamtx/hook?event=notready&path=$MTX_PATH&secret=change-me-hook-secret"

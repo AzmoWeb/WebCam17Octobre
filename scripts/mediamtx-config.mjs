@@ -1,5 +1,5 @@
 // Génère mediamtx/mediamtx.yml à partir de mediamtx/mediamtx.example.yml
-// en y injectant MEDIAMTX_HOOK_SECRET (lu dans .env.local ou l'environnement).
+// en y injectant MEDIAMTX_HOOK_SECRET (lu dans l'environnement, .env.local ou env.local).
 // Usage : npm run mediamtx:config
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -17,7 +17,10 @@ function readEnvFile(file) {
   return env;
 }
 
-const secret = process.env.MEDIAMTX_HOOK_SECRET ?? readEnvFile(join(root, ".env.local")).MEDIAMTX_HOOK_SECRET;
+const secret =
+  process.env.MEDIAMTX_HOOK_SECRET ??
+  readEnvFile(join(root, ".env.local")).MEDIAMTX_HOOK_SECRET ??
+  readEnvFile(join(root, "env.local")).MEDIAMTX_HOOK_SECRET;
 if (!secret || secret.length < 16 || !/^[A-Za-z0-9_-]+$/.test(secret)) {
   console.error(
     "MEDIAMTX_HOOK_SECRET manquant ou invalide dans .env.local (16 caractères minimum, lettres/chiffres/-/_).\n" +
